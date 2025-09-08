@@ -221,12 +221,200 @@ class DataSourceConnector(ABC):
                 f"Operation {operation} took {duration:.2f}s, processed {rows} rows"
             )
     
+    async def get_schema_with_inference(
+        self, 
+        use_inference: bool = True,
+        sample_size: int = 1000,
+        refresh: bool = False
+    ) -> Dict[str, Any]:
+        """获取数据源结构信息（带智能推断）
+        
+        Args:
+            use_inference: 是否使用智能类型推断
+            sample_size: 推断使用的样本大小
+            refresh: 是否刷新缓存
+            
+        Returns:
+            Dict[str, Any]: 增强的结构信息
+        """
+        # 获取基础schema
+        base_schema = await self.get_schema(refresh)
+        
+        if not use_inference:
+            return base_schema
+        
+        try:
+            # 动态导入避免循环依赖
+            from schema import SchemaInferencer
+            
+            # 获取数据样本用于推断
+            sample_data = await self.preview_data(limit=sample_size)
+            if sample_data.is_empty():
+                self._logger.warning("No data available for schema inference")
+                return base_schema
+            
+            # 创建推断器并推断schema
+            inferencer = SchemaInferencer(sample_size=sample_size)
+            
+            # 准备数据源信息
+            source_info = {
+                'source_id': self.source_id,
+                'source_type': self.source_type.value,
+                'connection_params': self.connection_params
+            }
+            
+            inferred_schema = inferencer.infer_schema(sample_data, source_info)
+            
+            # 合并基础schema和推断schema
+            enhanced_schema = self._merge_schemas(base_schema, inferred_schema)
+            
+            # 缓存增强后的schema
+            self._schema_cache = enhanced_schema
+            
+            return enhanced_schema
+            
+        except Exception as e:
+            self._logger.error(f"Schema inference failed: {e}")
+            # 推断失败时返回基础schema
+            return base_schema
+    
+    def _merge_schemas(self, base_schema: Dict[str, Any], inferred_schema: Dict[str, Any]) -> Dict[str, Any]:
+        """合并基础schema和推断schema"""
+        # 以推断schema为主，补充基础schema的信息
+        merged = inferred_schema.copy()
+        
+        # 补充文件信息等基础schema特有的信息
+        if 'file_info' in base_schema:
+            merged['file_info'] = base_schema['file_info']
+        
+        # 为每个列添加额外的基础信息
+        base_columns = base_schema.get('columns', {})
+        inferred_columns = merged.get('columns', {})
+        
+        for column_name, inferred_info in inferred_columns.items():
+            if column_name in base_columns:
+                base_info = base_columns[column_name]
+                # 合并列信息，保留推断的类型信息，添加基础的格式信息
+                if isinstance(base_info, dict) and isinstance(inferred_info, dict):
+                    merged_column = {**inferred_info}
+                    # 添加原始polars类型信息
+                    if 'original_polars_type' not in merged_column:
+                        merged_column['original_polars_type'] = base_info
+                    inferred_columns[column_name] = merged_column
+        
+        return merged
+    
+    async def validate_data(
+        self,
+        sample_size: int = 1000,
+        custom_rules: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    ) -> Dict[str, Any]:
+        """验证数据质量
+        
+        Args:
+            sample_size: 验证使用的样本大小
+            custom_rules: 自定义验证规则
+            
+        Returns:
+            Dict[str, Any]: 数据验证报告
+        """
+        try:
+            # 动态导入避免循环依赖
+            from schema import DataValidator
+            
+            # 获取数据样本
+            sample_data = await self.preview_data(limit=sample_size)
+            if sample_data.is_empty():
+                return {
+                    'error': 'No data available for validation',
+                    'dataset_name': self.source_id
+                }
+            
+            # 获取schema用于验证
+            schema = await self.get_schema_with_inference(sample_size=sample_size)
+            
+            # 创建验证器并验证数据
+            validator = DataValidator()
+            validation_report = validator.validate_dataframe(
+                sample_data, schema, custom_rules, self.source_id
+            )
+            
+            # 转换报告为字典格式
+            return {
+                'dataset_name': validation_report.dataset_name,
+                'total_rows': validation_report.total_rows,
+                'total_columns': validation_report.total_columns,
+                'validation_timestamp': validation_report.validation_timestamp,
+                'overall_quality_score': validation_report.overall_quality_score,
+                'summary': validation_report.get_summary(),
+                'column_reports': {
+                    name: {
+                        'column_name': report.column_name,
+                        'data_type': report.data_type,
+                        'total_rows': report.total_rows,
+                        'error_count': report.error_count,
+                        'warning_count': report.warning_count,
+                        'quality_score': report.quality_score,
+                        'validation_results': [
+                            {
+                                'rule': result.rule.value,
+                                'severity': result.severity.value,
+                                'passed': result.passed,
+                                'message': result.message,
+                                'affected_count': result.affected_count,
+                                'total_count': result.total_count
+                            }
+                            for result in report.validation_results
+                        ]
+                    }
+                    for name, report in validation_report.column_reports.items()
+                }
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Data validation failed: {e}")
+            return {
+                'error': f"Validation failed: {str(e)}",
+                'dataset_name': self.source_id
+            }
+    
+    async def get_type_conversion_suggestions(self) -> Dict[str, Any]:
+        """获取类型转换建议
+        
+        Returns:
+            Dict[str, Any]: 类型转换建议
+        """
+        try:
+            # 动态导入避免循环依赖
+            from schema import TypeConverter
+            
+            # 获取推断的schema
+            schema = await self.get_schema_with_inference()
+            
+            # 创建转换器并获取建议
+            converter = TypeConverter()
+            suggestions = converter.get_conversion_suggestions(schema)
+            
+            return {
+                'source_id': self.source_id,
+                'suggestions': suggestions,
+                'schema_timestamp': schema.get('inference_metadata', {}).get('inference_timestamp'),
+                'sample_size': schema.get('inference_metadata', {}).get('sample_size')
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to get conversion suggestions: {e}")
+            return {
+                'error': f"Failed to get suggestions: {str(e)}",
+                'source_id': self.source_id
+            }
+    
     async def get_info(self) -> DataSourceInfo:
         """获取数据源信息"""
         # 更新统计信息
         if self.connection_status == ConnectionStatus.CONNECTED:
             try:
-                schema = await self.get_schema()
+                schema = await self.get_schema_with_inference()
                 self.info.schema = schema
                 self.info.column_count = len(schema.get('columns', {}))
                 

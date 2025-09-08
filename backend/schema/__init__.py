@@ -6,11 +6,54 @@ Schema - 数据结构和类型推断模块
 from typing import Dict, Any, List, Optional, Union
 import polars as pl
 
-# 导出主要接口（等待后续Stream实现具体功能）
+# 导入智能推断系统
+from .inferencer import (
+    SchemaInferencer, TypeDetector, DateTimeParser, NullHandler,
+    DetectedDataType, TypeInferenceResult
+)
+
+# 导入数据验证系统
+from .validators import (
+    DataValidator, ConstraintValidator, OutlierDetector,
+    ValidationResult, ColumnValidationReport, DataValidationReport
+)
+
+# 导入类型转换系统
+from .converters import (
+    TypeConverter, NumericConverter, TextConverter, 
+    TemporalConverter, BooleanConverter, ComplexConverter,
+    ConversionResult, BatchConversionResult, ConversionStrategy
+)
+
+# 导出主要接口
 __all__ = [
     'SchemaInfo',
     'ColumnInfo', 
     'DataType',
+    # 智能推断系统
+    'SchemaInferencer',
+    'TypeDetector',
+    'DateTimeParser', 
+    'NullHandler',
+    'DetectedDataType',
+    'TypeInferenceResult',
+    # 数据验证系统
+    'DataValidator',
+    'ConstraintValidator',
+    'OutlierDetector',
+    'ValidationResult',
+    'ColumnValidationReport',
+    'DataValidationReport',
+    # 类型转换系统
+    'TypeConverter',
+    'NumericConverter',
+    'TextConverter',
+    'TemporalConverter',
+    'BooleanConverter',
+    'ComplexConverter',
+    'ConversionResult',
+    'BatchConversionResult',
+    'ConversionStrategy',
 ]
 
 
