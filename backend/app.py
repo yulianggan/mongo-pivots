@@ -4,7 +4,11 @@ from models import QueryRequest
 from db import list_collections, get_collection, sample_fields
 from utils import flatten_doc
 from prefs import PrefsStore
+from core.data_engine import data_engine
+from core.config import config
+from core.memory_guard import memory_guard
 import pandas as pd
+import polars as pl
 from io import BytesIO
 import chardet
 import math
@@ -33,6 +37,15 @@ def root(): return {"message":"ok"}
 
 @app.get("/api/health")
 def health(): return {"status":"ok"}
+
+@app.get("/api/engine/status")
+def engine_status():
+    """获取数据引擎状态和性能统计"""
+    return {
+        "status": "ok",
+        "engine": "polars",
+        "stats": data_engine.get_performance_stats()
+    }
 
 @app.get("/api/collections")
 def collections(): return {"collections": list_collections()}
@@ -315,112 +328,81 @@ async def upload(file: UploadFile = File(...), sheet: str | None = Form(None), s
         raise HTTPException(400, "文件为空")
     
     try:
-        if ext in ("csv", "tsv", "txt"):
-            # 检测编码
-            detected = chardet.detect(content)
-            encoding = detected.get('encoding', 'utf-8') if detected else 'utf-8'
-            
-            # 如果检测置信度低，尝试常见编码
-            if detected and detected.get('confidence', 0) < 0.7:
-                for enc in ['utf-8', 'gbk', 'gb2312', 'latin-1', 'cp1252']:
-                    try:
-                        content.decode(enc)
-                        encoding = enc
-                        break
-                    except:
-                        continue
-            
-            # 智能检测分隔符
-            sep = detect_separator(content, encoding)
-            
-            # 如果是特定文件类型，覆盖检测结果
-            if ext == "tsv":
-                sep = "\t"
-            elif ext == "csv" and sep == '\t':  # CSV文件不应该是制表符分隔
-                sep = ","
-            
-            # 使用强大的CSV解析函数
-            df = parse_csv_robust(content, encoding, sep, start_row)
-            
-        else:
-            # Excel文件处理
-            sheet_arg = None
-            if sheet:
+        with memory_guard.memory_guard(f"upload_{name}"):
+            if ext in ("csv", "tsv", "txt"):
+                # 检测编码
+                detected = chardet.detect(content)
+                encoding = detected.get('encoding', 'utf-8') if detected else 'utf-8'
+                
+                # 如果检测置信度低，尝试常见编码
+                if detected and detected.get('confidence', 0) < 0.7:
+                    for enc in ['utf-8', 'gbk', 'gb2312', 'latin-1', 'cp1252']:
+                        try:
+                            content.decode(enc)
+                            encoding = enc
+                            break
+                        except:
+                            continue
+                
+                # 智能检测分隔符
+                sep = detect_separator(content, encoding)
+                
+                # 如果是特定文件类型，覆盖检测结果
+                if ext == "tsv":
+                    sep = "\t"
+                elif ext == "csv" and sep == '\t':  # CSV文件不应该是制表符分隔
+                    sep = ","
+                
+                # 使用新的Polars数据引擎
                 try:
-                    sheet_arg = int(sheet)
-                except:
-                    sheet_arg = sheet
-            
-            try:
-                df = pd.read_excel(
-                    BytesIO(content),
-                    sheet_name=sheet_arg,
-                    header=start_row-1 if start_row > 1 else 0,
-                    engine=None,
-                    na_values=['', 'NULL', 'null', 'N/A', 'n/a', 'NA', 'na'],
-                    keep_default_na=True
-                )
-                if isinstance(df, dict):
-                    first_key = list(df.keys())[0]
-                    df = df[first_key]
-            except Exception as e:
-                raise HTTPException(400, f"Excel文件读取失败: {str(e)}")
-        
-        # 数据清理和转换
-        if df.empty:
-            raise HTTPException(400, "文件不包含任何数据")
-        
-        # 清理列名
-        df.columns = [str(col).strip() if col is not None else f'Column_{i}' 
-                     for i, col in enumerate(df.columns)]
-        
-        # 删除完全空的行
-        df = df.dropna(how='all')
-        
-        if df.empty:
-            raise HTTPException(400, "清理后文件不包含任何数据")
-        
-        # 数据类型转换
-        for col in df.columns:
-            try:
-                # 尝试转换为数值
-                numeric_col = pd.to_numeric(df[col], errors='coerce')
-                # 如果转换成功且不是全部NaN，则使用转换后的结果
-                if not numeric_col.isna().all():
-                    df[col] = numeric_col
-            except:
-                # 转换失败，保持原始数据
-                pass
-        
-        # 处理特殊浮点数值
-        df = df.replace([float('inf'), float('-inf')], None)
-        df = df.where(pd.notnull(df), None)
-        
-        # 转换为记录列表，确保JSON序列化安全
-        rows = [{str(k): safe_convert_value(v) for k, v in rec.items()} 
-                for rec in df.to_dict(orient="records")]
-        
-        # 获取字段类型信息
-        fields = {}
-        for col in df.columns:
-            dtype = str(df[col].dtype)
-            if dtype.startswith('int') or dtype.startswith('float'):
-                fields[str(col)] = 'number'
-            elif dtype == 'bool':
-                fields[str(col)] = 'boolean'
+                    df = data_engine.read_csv(content, sep, encoding, start_row)
+                except Exception as e:
+                    # 如果Polars失败，回退到原有的pandas方法
+                    print(f"Polars engine failed: {e}, using pandas fallback")
+                    df = parse_csv_robust(content, encoding, sep, start_row)
+                    # 转换pandas DataFrame为Polars
+                    df = pl.from_pandas(df)
+                
             else:
-                fields[str(col)] = 'string'
-        
-        if not rows:
-            raise HTTPException(400, "文件中没有找到有效数据")
-        
-        return {
-            "filename": name,
-            "count": len(rows),
-            "rows": rows,
-            "fields": fields,
-            "message": f"成功解析 {len(rows)} 行数据，共 {len(df.columns)} 列"
-        }
+                # Excel文件处理 - 使用数据引擎
+                sheet_arg = None
+                if sheet:
+                    try:
+                        sheet_arg = int(sheet)
+                    except:
+                        sheet_arg = sheet
+                
+                try:
+                    df = data_engine.read_excel(content, sheet_arg, start_row)
+                except Exception as e:
+                    raise HTTPException(400, f"Excel文件读取失败: {str(e)}")
+            
+            # 数据清理
+            df = data_engine.clean_dataframe(df)
+            
+            if df.is_empty():
+                raise HTTPException(400, "文件不包含任何数据")
+            
+            # 优化DataFrame
+            df = data_engine.optimize_dataframe(df)
+            
+            # 转换为记录列表，确保JSON序列化安全
+            rows = data_engine.convert_to_records(df)
+            
+            # 获取字段类型信息
+            fields = data_engine.get_field_types(df)
+            
+            if not rows:
+                raise HTTPException(400, "文件中没有找到有效数据")
+            
+            return {
+                "filename": name,
+                "count": len(rows),
+                "rows": rows,
+                "fields": fields,
+                "message": f"成功解析 {len(rows)} 行数据，共 {len(df.columns)} 列",
+                "engine": "polars"  # 标识使用的引擎
+            }
         
     except HTTPException:
         raise
