@@ -16,6 +16,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple, BinaryIO
 from datetime import datetime, timezone
 import logging
 import json
+from io import BytesIO
 
 import polars as pl
 import pandas as pd
