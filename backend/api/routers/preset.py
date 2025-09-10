@@ -14,6 +14,7 @@ from ...models.api.request_models import PresetSaveRequest, PresetListRequest
 from ...models.api.response_models import (
     PresetSaveResponse, PresetListResponse, APIResponse, PresetInfo
 )
+from ...services.preset_service import preset_service
 
 logger = logging.getLogger(__name__)
 
@@ -46,41 +47,18 @@ async def save_preset(
     logger.info(f"用户 {current_user.user_id} 保存预设: {request.name}")
     
     try:
-        # 验证预设名称唯一性（用户范围内）
-        # TODO: 实现预设服务调用
-        # existing_preset = await preset_service.get_preset_by_name(
-        #     name=request.name,
-        #     user_id=current_user.user_id
-        # )
-        # if existing_preset:
-        #     raise ValidationAPIError(f"预设名称 '{request.name}' 已存在")
-        
         # 验证连接操作的有效性
         await _validate_preset_operations(request.operations, current_user.user_id)
         
         # 保存预设
-        # TODO: 实现预设服务调用
-        # preset = await preset_service.save_preset(
-        #     name=request.name,
-        #     description=request.description,
-        #     operations=request.operations,
-        #     output_columns=request.output_columns,
-        #     tags=request.tags,
-        #     is_public=request.is_public,
-        #     user_id=current_user.user_id
-        # )
-        
-        # 临时模拟预设信息
-        preset_info = PresetInfo(
-            preset_id="preset_temp_123",
+        preset_info = await preset_service.save_preset(
             name=request.name,
             description=request.description,
-            user_id=current_user.user_id,
+            operations=request.operations,
+            output_columns=request.output_columns,
+            tags=request.tags,
             is_public=request.is_public,
-            tags=request.tags or [],
-            usage_count=0,
-            created_at="2025-09-10T10:00:00Z",
-            updated_at="2025-09-10T10:00:00Z"
+            user_id=current_user.user_id
         )
         
         logger.info(f"预设保存成功: {preset_info.preset_id}")
@@ -92,6 +70,9 @@ async def save_preset(
         
     except APIError:
         raise
+    except ValueError as e:
+        logger.warning(f"预设保存验证失败: {str(e)}")
+        raise ValidationAPIError(str(e))
     except Exception as e:
         logger.error(f"预设保存失败: {str(e)}")
         raise APIError(
@@ -140,52 +121,23 @@ async def list_presets(
             raise ValidationAPIError(f"无效的排序顺序: {sort_order}")
         
         # 获取预设列表
-        # TODO: 实现预设服务调用
-        # presets_result = await preset_service.list_presets(
-        #     user_id=current_user.user_id,
-        #     offset=offset,
-        #     limit=limit,
-        #     search=search,
-        #     tags=tags,
-        #     is_public=is_public,
-        #     sort_by=sort_by,
-        #     sort_order=sort_order
-        # )
-        
-        # 临时模拟预设列表
-        presets = [
-            PresetInfo(
-                preset_id=f"preset_{i}",
-                name=f"预设配置 {i}",
-                description=f"这是第 {i} 个预设配置的描述",
-                user_id=current_user.user_id,
-                is_public=i % 3 == 0,  # 每三个一个公开
-                tags=["数据连接", f"标签{i}"],
-                usage_count=i * 5,
-                created_at="2025-09-10T10:00:00Z",
-                updated_at="2025-09-10T10:00:00Z"
-            )
-            for i in range(1, min(limit + 1, 11))
-        ]
-        
-        # 如果有搜索关键词，过滤结果
-        if search:
-            search_lower = search.lower()
-            presets = [
-                p for p in presets 
-                if search_lower in p.name.lower() 
-                or (p.description and search_lower in p.description.lower())
-                or any(search_lower in tag.lower() for tag in p.tags)
-            ]
-        
-        total = 50  # 临时总数
-        
-        return PresetListResponse(
-            total=total,
+        presets_result = await preset_service.list_presets(
+            user_id=current_user.user_id,
             offset=offset,
             limit=limit,
-            has_more=(offset + limit) < total,
-            presets=presets
+            search=search,
+            tags=tags,
+            is_public=is_public,
+            sort_by=sort_by,
+            sort_order=sort_order
+        )
+        
+        return PresetListResponse(
+            total=presets_result["total"],
+            offset=presets_result["offset"],
+            limit=presets_result["limit"],
+            has_more=presets_result["has_more"],
+            presets=presets_result["presets"]
         )
         
     except APIError:
@@ -223,62 +175,22 @@ async def get_preset(
     
     try:
         # 获取预设详情
-        # TODO: 实现预设服务调用
-        # preset = await preset_service.get_preset_detail(preset_id, current_user.user_id)
-        # if not preset:
-        #     raise NotFoundAPIError("Preset", preset_id)
-        
-        # 检查访问权限（公开预设或用户自己的预设）
-        # if not preset.is_public and preset.user_id != current_user.user_id:
-        #     raise APIError(
-        #         message="没有访问此预设的权限",
-        #         error_code="PRESET_ACCESS_DENIED",
-        #         status_code=403
-        #     )
-        
-        # 临时模拟预设详情
-        preset_detail = {
-            "preset_info": {
-                "preset_id": preset_id,
-                "name": "用户订单关联查询",
-                "description": "关联用户表和订单表，获取用户的订单信息",
-                "user_id": current_user.user_id,
-                "is_public": False,
-                "tags": ["用户", "订单", "关联查询"],
-                "usage_count": 15,
-                "created_at": "2025-09-10T09:00:00Z",
-                "updated_at": "2025-09-10T10:00:00Z"
-            },
-            "operations": [
-                {
-                    "left_dataset": {
-                        "dataset_id": "ds_users",
-                        "alias": "u",
-                        "columns": ["id", "name", "email"]
-                    },
-                    "right_dataset": {
-                        "dataset_id": "ds_orders",
-                        "alias": "o",
-                        "columns": ["user_id", "amount", "created_at"]
-                    },
-                    "join_type": "inner",
-                    "conditions": [
-                        {
-                            "left_column": "id",
-                            "right_column": "user_id",
-                            "operator": "="
-                        }
-                    ]
-                }
-            ],
-            "output_columns": ["u.name", "u.email", "o.amount", "o.created_at"]
-        }
+        preset_detail = await preset_service.get_preset_detail(preset_id, current_user.user_id)
+        if not preset_detail:
+            raise NotFoundAPIError("Preset", preset_id)
         
         # 增加使用次数
-        # TODO: 实现使用次数更新
-        # await preset_service.increment_usage_count(preset_id)
+        await preset_service.increment_usage_count(preset_id)
         
-        return preset_detail
+        # 格式化返回数据
+        return {
+            "preset_info": {
+                k: v for k, v in preset_detail.items() 
+                if k not in ["operations", "output_columns"]
+            },
+            "operations": preset_detail["operations"],
+            "output_columns": preset_detail["output_columns"]
+        }
         
     except APIError:
         raise
@@ -312,55 +224,19 @@ async def update_preset(
     logger.info(f"用户 {current_user.user_id} 更新预设: {preset_id}")
     
     try:
-        # 获取现有预设并验证权限
-        # TODO: 实现预设服务调用
-        # existing_preset = await preset_service.get_preset(preset_id)
-        # if not existing_preset:
-        #     raise NotFoundAPIError("Preset", preset_id)
-        
-        # if existing_preset.user_id != current_user.user_id:
-        #     raise APIError(
-        #         message="只能更新自己创建的预设",
-        #         error_code="PRESET_UPDATE_DENIED",
-        #         status_code=403
-        #     )
-        
-        # 检查名称冲突（排除当前预设）
-        # existing_name_preset = await preset_service.get_preset_by_name(
-        #     name=request.name,
-        #     user_id=current_user.user_id,
-        #     exclude_preset_id=preset_id
-        # )
-        # if existing_name_preset:
-        #     raise ValidationAPIError(f"预设名称 '{request.name}' 已存在")
-        
         # 验证连接操作
         await _validate_preset_operations(request.operations, current_user.user_id)
         
         # 更新预设
-        # TODO: 实现预设服务调用
-        # preset = await preset_service.update_preset(
-        #     preset_id=preset_id,
-        #     name=request.name,
-        #     description=request.description,
-        #     operations=request.operations,
-        #     output_columns=request.output_columns,
-        #     tags=request.tags,
-        #     is_public=request.is_public,
-        #     user_id=current_user.user_id
-        # )
-        
-        # 临时模拟更新后的预设
-        preset_info = PresetInfo(
+        preset_info = await preset_service.update_preset(
             preset_id=preset_id,
             name=request.name,
             description=request.description,
-            user_id=current_user.user_id,
+            operations=request.operations,
+            output_columns=request.output_columns,
+            tags=request.tags,
             is_public=request.is_public,
-            tags=request.tags or [],
-            usage_count=15,  # 保持原有使用次数
-            created_at="2025-09-10T09:00:00Z",  # 保持原有创建时间
-            updated_at="2025-09-10T10:00:00Z"   # 更新时间
+            user_id=current_user.user_id
         )
         
         logger.info(f"预设更新成功: {preset_id}")
@@ -372,6 +248,9 @@ async def update_preset(
         
     except APIError:
         raise
+    except ValueError as e:
+        logger.warning(f"预设更新验证失败: {str(e)}")
+        raise ValidationAPIError(str(e))
     except Exception as e:
         logger.error(f"预设更新失败: {str(e)}")
         raise APIError(
@@ -401,22 +280,8 @@ async def delete_preset(
     logger.info(f"用户 {current_user.user_id} 删除预设: {preset_id}")
     
     try:
-        # 获取预设并验证权限
-        # TODO: 实现预设服务调用
-        # preset = await preset_service.get_preset(preset_id)
-        # if not preset:
-        #     raise NotFoundAPIError("Preset", preset_id)
-        
-        # if preset.user_id != current_user.user_id:
-        #     raise APIError(
-        #         message="只能删除自己创建的预设",
-        #         error_code="PRESET_DELETE_DENIED",
-        #         status_code=403
-        #     )
-        
         # 删除预设
-        # TODO: 实现预设服务调用
-        # await preset_service.delete_preset(preset_id, current_user.user_id)
+        await preset_service.delete_preset(preset_id, current_user.user_id)
         
         logger.info(f"预设删除成功: {preset_id}")
         
@@ -426,6 +291,9 @@ async def delete_preset(
         
     except APIError:
         raise
+    except ValueError as e:
+        logger.warning(f"预设删除验证失败: {str(e)}")
+        raise ValidationAPIError(str(e))
     except Exception as e:
         logger.error(f"预设删除失败: {str(e)}")
         raise APIError(
@@ -456,58 +324,25 @@ async def clone_preset(
     logger.info(f"用户 {current_user.user_id} 克隆预设: {preset_id} -> {new_name}")
     
     try:
-        # 获取源预设
-        # TODO: 实现预设服务调用
-        # source_preset = await preset_service.get_preset_detail(preset_id, current_user.user_id)
-        # if not source_preset:
-        #     raise NotFoundAPIError("Preset", preset_id)
-        
-        # 检查访问权限
-        # if not source_preset.is_public and source_preset.user_id != current_user.user_id:
-        #     raise APIError(
-        #         message="没有访问此预设的权限",
-        #         error_code="PRESET_ACCESS_DENIED",
-        #         status_code=403
-        #     )
-        
-        # 检查新名称是否冲突
-        # existing_preset = await preset_service.get_preset_by_name(
-        #     name=new_name,
-        #     user_id=current_user.user_id
-        # )
-        # if existing_preset:
-        #     raise ValidationAPIError(f"预设名称 '{new_name}' 已存在")
-        
         # 克隆预设
-        # TODO: 实现预设服务调用
-        # cloned_preset = await preset_service.clone_preset(
-        #     source_preset_id=preset_id,
-        #     new_name=new_name,
-        #     user_id=current_user.user_id
-        # )
-        
-        # 临时模拟克隆的预设
-        preset_info = PresetInfo(
-            preset_id="preset_cloned_456",
-            name=new_name,
-            description=f"克隆自预设 {preset_id}",
-            user_id=current_user.user_id,
-            is_public=False,  # 克隆的预设默认为私有
-            tags=["克隆", "数据连接"],
-            usage_count=0,
-            created_at="2025-09-10T10:00:00Z",
-            updated_at="2025-09-10T10:00:00Z"
+        cloned_preset = await preset_service.clone_preset(
+            source_preset_id=preset_id,
+            new_name=new_name,
+            user_id=current_user.user_id
         )
         
-        logger.info(f"预设克隆成功: {preset_info.preset_id}")
+        logger.info(f"预设克隆成功: {cloned_preset.preset_id}")
         
         return PresetSaveResponse(
             message=f"预设 '{new_name}' 克隆成功",
-            preset=preset_info
+            preset=cloned_preset
         )
         
     except APIError:
         raise
+    except ValueError as e:
+        logger.warning(f"预设克隆验证失败: {str(e)}")
+        raise ValidationAPIError(str(e))
     except Exception as e:
         logger.error(f"预设克隆失败: {str(e)}")
         raise APIError(
@@ -544,3 +379,116 @@ async def _validate_preset_operations(operations: list, user_id: str) -> None:
         
         # TODO: 这里可以进一步验证数据集是否存在、列是否有效等
         # 但由于我们还没有实现服务层，暂时跳过这些验证
+
+
+@router.get(
+    "/templates",
+    response_model=dict,
+    summary="获取预设模板",
+    description="获取可用的预设模板列表",
+    response_description="返回预设模板列表"
+)
+async def get_preset_templates(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取预设模板列表
+    
+    返回系统提供的预设模板，用户可以基于这些模板快速创建预设
+    """
+    logger.info(f"用户 {current_user.user_id} 获取预设模板")
+    
+    try:
+        templates = await preset_service.get_preset_templates()
+        
+        return {
+            "success": True,
+            "message": "获取预设模板成功",
+            "templates": templates
+        }
+        
+    except Exception as e:
+        logger.error(f"获取预设模板失败: {str(e)}")
+        raise APIError(
+            message=f"获取预设模板失败: {str(e)}",
+            error_code="PRESET_TEMPLATES_FAILED",
+            status_code=500
+        )
+
+
+@router.get(
+    "/popular",
+    response_model=dict,
+    summary="获取热门预设",
+    description="获取使用次数最多的预设列表",
+    response_description="返回热门预设列表"
+)
+async def get_popular_presets(
+    limit: int = Query(10, ge=1, le=50, description="返回数量限制"),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取热门预设
+    
+    返回按使用次数排序的热门预设列表
+    """
+    logger.info(f"用户 {current_user.user_id} 获取热门预设")
+    
+    try:
+        popular_presets = await preset_service.get_popular_presets(
+            user_id=current_user.user_id,
+            limit=limit
+        )
+        
+        return {
+            "success": True,
+            "message": "获取热门预设成功",
+            "presets": popular_presets
+        }
+        
+    except Exception as e:
+        logger.error(f"获取热门预设失败: {str(e)}")
+        raise APIError(
+            message=f"获取热门预设失败: {str(e)}",
+            error_code="POPULAR_PRESETS_FAILED",
+            status_code=500
+        )
+
+
+@router.get(
+    "/recent",
+    response_model=dict,
+    summary="获取最近预设",
+    description="获取最近创建的预设列表",
+    response_description="返回最近预设列表"
+)
+async def get_recent_presets(
+    limit: int = Query(10, ge=1, le=50, description="返回数量限制"),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取最近创建的预设
+    
+    返回按创建时间排序的最近预设列表
+    """
+    logger.info(f"用户 {current_user.user_id} 获取最近预设")
+    
+    try:
+        recent_presets = await preset_service.get_recent_presets(
+            user_id=current_user.user_id,
+            limit=limit
+        )
+        
+        return {
+            "success": True,
+            "message": "获取最近预设成功",
+            "presets": recent_presets
+        }
+        
+    except Exception as e:
+        logger.error(f"获取最近预设失败: {str(e)}")
+        raise APIError(
+            message=f"获取最近预设失败: {str(e)}",
+            error_code="RECENT_PRESETS_FAILED",
+            status_code=500
+        )

@@ -21,6 +21,9 @@ from .registry import (
     registry
 )
 
+# 导入具体连接器实现（触发装饰器注册）
+from . import mongo_connector
+
 # 导出主要接口
 __all__ = [
     # 基类和类型
@@ -40,6 +43,9 @@ __all__ = [
     'DataSourceRegistry',
     'RegistryStats',
     'registry',  # 全局注册表实例
+    
+    # 装饰器
+    'connector_type',
 ]
 
 

@@ -310,6 +310,29 @@ class CacheManager:
             return cache_key
         return None
     
+    def get_bulk(self, key: str) -> Optional[List[Any]]:
+        """批量获取缓存值（用于分块处理）"""
+        return self.get(key)
+    
+    def set_bulk(self, key: str, values: List[Any], ttl: int) -> bool:
+        """批量设置缓存值（用于分块处理）"""
+        ttl_hours = ttl // 3600
+        return self.set(key, values, ttl_hours or 1)
+    
+    def delete_pattern(self, pattern: str) -> int:
+        """按模式删除缓存条目"""
+        return self.clear_pattern(pattern)
+    
+    def get_keys_by_pattern(self, pattern: str) -> List[str]:
+        """按模式获取所有键"""
+        try:
+            client = self._get_client()
+            keys = client.keys(pattern)
+            return [key.decode() for key in keys]
+        except Exception as e:
+            logger.error(f"Failed to get keys by pattern {pattern}: {e}")
+            return []
+    
     def cleanup_expired(self) -> int:
         """清理过期的缓存条目（Redis会自动处理TTL，这里主要用于统计）"""
         try:
@@ -365,3 +388,7 @@ def is_cache_available() -> bool:
         return cache.is_available()
     except Exception:
         return False
+
+
+# 全局缓存管理器实例
+cache_manager = get_cache_manager()

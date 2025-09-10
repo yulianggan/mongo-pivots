@@ -28,10 +28,12 @@ class PolarsConfig:
 @dataclass
 class PerformanceConfig:
     """性能配置"""
-    benchmark_threshold_seconds: float = 10.0  # 100万行操作阈值（秒）
+    benchmark_threshold_seconds: float = 15.0  # 100万行操作阈值（秒）
+    csv_performance_target_seconds: float = 15.0  # CSV读取性能目标
     enable_profiling: bool = False  # 是否启用性能分析
     log_slow_operations: bool = True  # 记录慢操作
     slow_operation_threshold_ms: int = 1000  # 慢操作阈值（毫秒）
+    optimize_large_files: bool = True  # 自动优化大文件处理
 
 
 class ConfigManager:

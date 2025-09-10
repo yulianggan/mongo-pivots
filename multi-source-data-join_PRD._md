@@ -1,0 +1,299 @@
+---
+name: multi-source-data-join
+description: 多源多表连接功能，支持Mongo/Excel/CSV任意组合连接生成分析就绪宽表
+status: backlog
+created: 2025-09-08T09:19:31Z
+---
+
+# PRD: 多源多表连接功能（最终版）
+
+## Executive Summary
+
+在现有拖拽透视分析工具基础上，新增**多数据源连接**能力，支持 MongoDB 集合、Excel、CSV 的任意组合 Join/Append，配置后自动生成“**分析就绪宽表**（AR Table）”，无缝进入现有透视。方案内置**源级去重（MD5 组合键）**、**空值治理**、**日期/时间键与时区对齐（默认 Asia/Shanghai，可覆盖）**、**Polars 高性能管线**与 **Redis 缓存**，满足 3,000,000 行、单文件 ≤ 4GB、同时 6 源的规模与时限约束。默认“**警告继续**”的容错风格，最大化完成度与可用性。
+
+## Problem Statement
+
+### 当前痛点
+1. **数据孤岛**：Mongo、Excel、CSV 分散存储，难以统一分析。  
+2. **手工整合**：反复导出、清洗、合并，耗时易错。  
+3. **分析割裂**：单源透视无法获得全局视角。  
+4. **重复劳动**：相同连接操作反复执行，缺少复用机制。
+
+### 商业价值
+- **效率**：数据准备时间减少 80–90%。  
+- **洞察**：跨源关联，发现隐藏关系。  
+- **易用**：无需 SQL，面向业务的向导式配置。  
+- **一致**：统一进入现有透视，降低学习成本与维护成本。
+
+## User Stories
+
+### 主要角色
+- **🧮 数据分析师（小王）**：订单（Mongo）+ 客户（Excel）+ 商品（CSV）三源关联出客户×产品×销售分析，原需 2h，目标 10min 内完成。  
+- **👔 业务经理（李总）**：快速生成整合看板，降低对技术同学依赖。  
+- **📊 BI 工程师（张工）**：为临时分析提供可复用 Preset，减少重复 ETL。
+
+### 典型旅程
+**场景A：订单-客户-产品关联（Join）**  
+1) 选 `orders`（Mongo）为驱动表；2) 选 `customers.xlsx`，按 `customer_id` 连接；3) 选 `products.csv`，按 `product_id` 连接；4) 预览计划与样本；5) 生成 AR Table 并进入透视。
+
+**场景B：跨月 Excel 合并（Append/Union）**  
+1) 上传 `2025-01.xlsx` 与 `2025-02.xlsx`；2) 选择 **Append（纵向并集）**；3) 系统对齐同名列/类型并生成 AR Table；4) 以月份维度分析趋势。
+
+## Requirements
+
+### Functional Requirements
+
+#### FR1 数据源管理
+- FR1.1 支持添加数据源：`mongo_collection` / `excel_sheet` / `csv_file`。  
+- FR1.2 自动推断字段与类型，支持手动覆盖。  
+- FR1.3 提供预览（前 100 行 + 随机 100 行）。  
+- FR1.4 支持数据源重命名与描述。  
+- FR1.5 支持文件分块上传与大文件断点续传；Excel 解析走 `xlsx2csv` 流式管线。
+
+#### FR2 连接配置（Join / Append）
+- FR2.1 任意 6 源以内的组合：Mongo↔Mongo、Mongo↔Excel、Mongo↔CSV、Excel↔Excel、Excel↔CSV、CSV↔CSV。  
+- FR2.2 Join 类型：`INNER`、`LEFT`（默认）、`RIGHT`、`FULL OUTER`。  
+- FR2.3 支持复合键与跨源字段名映射；支持**时间键**（见 FR3）。  
+- FR2.4 字段筛选/重命名与冲突消解（自动前缀 + 手动别名）。  
+- FR2.5 Append（纵向并集）：多表列对齐（同名/映射）、类型统一、缺列填充。  
+- FR2.6 配置可保存为 **Preset**，支持版本与共享。
+
+#### FR3 时间/时区对齐（时间键）
+- FR3.1 支持字符串时间（含 `YYYY-MM-DD HH:MM:SS.mmm`）、epoch 秒/毫秒、原生 date/datetime。  
+- FR3.2 三层时区配置：全局（默认 `Asia/Shanghai`）→ 源级 → 键级；先按 `source_tz` 解析，再转 `target_tz`，再按粒度对齐（默认 `truncate('day')`）。  
+- FR3.3 可选**窗口 Join**（如 `±1h`），默认关闭并给出多对多风险预警。  
+- FR3.4 解析失败策略：`on_parse_fail=as_null`；成功率 < 90% 发**警告**。
+
+#### FR4 源级去重与空值治理
+- FR4.1 **去重**：用户指定组合键→规范化→连接不可见分隔符→**MD5 指纹**；策略 `keep_last`（默认，按 `update_ts desc`）/`keep_first`/`order_by`/`aggregate`/`error`。  
+- FR4.2 **空值**：统一空值字典（`""`, 空格, NBSP, `"N/A"`, `"—"`, `"NULL"`→NULL，可配）；Join 键空值策略 `skip_if_null`（默认）/`use_placeholder`/`outer_keep_unmatched`。  
+- FR4.3 字段级填充：`fill_constant` / `fill_stat(mean|median|mode)` / `fill_from_other([col...])` / `drop_if_all_null([...])`。  
+- FR4.4 质量报告：重复率/重复组、空值率与填充条数、时间解析/跨午夜影响、未匹配行数与样本。
+
+#### FR5 AR Table 生成与透视
+- FR5.1 产出 **AR Table**（虚拟表 `resultId`）：物理列 `snake_case` + 源前缀；显示名保留原文。  
+- FR5.2 类型统一：`int64/float64/bool/utf8/date/datetime[tz]`；提供 `date_key`（按目标时区对齐）与可选 `datetime_aligned`。  
+- FR5.3 与现有透视无缝集成；支持导出 CSV/Parquet。  
+- FR5.4 Preset 缓存命中时直接复用结果或 manifest。
+
+### Non-Functional Requirements
+
+#### NFR1 性能与资源（以最优默认为准）
+- NFR1.1 **规模**：单文件 ≤ **4GB**；单结果集 ≤ **3,000,000 行**；单任务最多 **6 源**。  
+- NFR1.2 **时限**：默认超时 **15 分钟**（上限 60 分钟可后台任务）。  
+- NFR1.3 **内存**：使用容器内存的 **≤60%**，且硬上限 **8GB**（二者取小）。  
+- NFR1.4 **分块**：默认 `chunkSize=200,000` 行；大表落地 Parquet 分片继续流水。  
+- NFR1.5 **并发**：单用户并发 Join ≤ 2，队列 ≤ 5；支持进度与取消。  
+- NFR1.6 **缓存**：Redis 内存缓存（TTL 72h），小结果就地存储，大结果存 manifest。
+
+> 注：本 NFR 覆盖并**替代**旧的临时占位（如 100 万行/2GB）限制。
+
+#### NFR2 可用性
+- NFR2.1 向导式 UI，学习成本 < 10 分钟。  
+- NFR2.2 错误消息带修复建议；默认“**警告继续**”。  
+- NFR2.3 Preset 模板与向导；操作可撤销/重做。  
+- NFR2.4 SSE 实时日志与进度。
+
+#### NFR3 兼容性
+- NFR3.1 Excel 97–2019（.xls/.xlsx，经 `xlsx2csv` 转流）。  
+- NFR3.2 CSV/TSV 编码：UTF-8、GBK、GB2312、CP1251/1252（自动探测 + 手动覆盖）。  
+- NFR3.3 MongoDB 4.0+。  
+- NFR3.4 浏览器：Chrome 90+ / Firefox 88+ / Edge 90+。  
+- NFR3.5 前端技术栈：**React + TypeScript**（由 JS 升级）。
+
+## Success Criteria
+
+- 30 天内活跃用户使用连接功能 ≥ 70%。  
+- 人均每周创建连接 ≥ 3 次，Preset 复用率 ≥ 50%。  
+- 10 万行×2 表 Join 时间 < 15 秒（参考硬件）。  
+- 连接成功率 ≥ 99%，系统可用性 ≥ 99.5%。  
+- 数据准备时间减少 ≥ 80%，上手时间 < 30 分钟。
+
+## Constraints & Assumptions
+
+### Technical Constraints（统一为最终取舍）
+- 资源护栏：内存 ≤60% 或 8GB 上限；超时默认 15 分钟。  
+- 存储：Redis（缓存），对象存储/本地盘（Parquet 分片）。  
+- 依赖：后端允许安装 `xlsx2csv`；不可用时改为“先转 Parquet 再读”。
+
+### Business Constraints
+- 开发 3 个月：后端 2 人 + 前端 1 人 + 测试支持。  
+- 必须完全兼容现有透视。  
+- 不新增外部付费服务（Redis 可自管）。
+
+### Key Assumptions
+- 用户具备基础透视使用经验。  
+- 连接字段质量基础良好；混合时间格式可按规则解析。  
+- 对默认“警告继续”可接受；可在任务设置中切换为“严格失败”。
+
+## Out of Scope（V1 不含）
+- 实时增量同步；高级 ETL 变换。  
+- 细粒度权限与数据血缘（V2+）。  
+- 外部 API 数据源、MySQL/PG/BigQuery。  
+- 公共 SDK/API（先提供后端内部 API）。
+
+## Dependencies
+
+- **外部**：Mongo 服务、文件存储、稳定网络、浏览器 File API/Web Workers。  
+- **内部**：透视引擎读取 `resultId`、后端 Polars 管线、UI 组件库、统一错误系统。
+
+## Technical Architecture
+
+### High-Level Design
+```
+Frontend (React + TypeScript)
+├─ Data Source Manager
+├─ Connection Wizard (Join/Append)
+├─ Join Preview & Quality Report
+└─ AR Table Integration (Pivot)
+
+Backend (FastAPI + Polars + PyArrow)
+├─ Ingestion & Parsers (xlsx2csv, CSV)
+├─ Normalize/Dedup/Time Align/Join Engine
+├─ Caching (Redis) & Manifest Store (Parquet)
+└─ Result API (resultId pagination/sample)
+
+Storage
+├─ MongoDB (source)
+├─ File Storage / Object Store (uploads & parquet)
+└─ Redis (cache: small results/manifests)
+```
+
+### Data Flow
+1) 数据源注册/上传 → 推断类型与采样预览  
+2) 向导配置（键/时间/字段/去重/空值/Join 类型/Append）  
+3) 计划摘要与样本预览 → 执行  
+4) Polars 管线：去重 → 类型/时间规范化 → Join/Append → 质量报告 → 结果落地（内存/Parquet）  
+5) 返回 `resultId` → 透视/导出 → Redis 命中则直接复用
+
+## API Endpoints（草案）
+- `POST /api/dataset/upload` ：上传 Excel/CSV（分块），返回 `{fileId, sheets?, inferred}`  
+- `POST /api/dataset/register` ：注册 Mongo 集合或文件逻辑表  
+- `POST /api/join/preview` ：输入 Preset，返回计划摘要与风险  
+- `POST /api/join/execute` ：执行 Join/Append，返回 `{resultId, report, fields}`  
+- `GET  /api/join/result/{resultId}` ：分页/采样读取结果（供透视/预览）  
+- `POST /api/join/preset` / `GET /api/join/preset` ：保存/获取 Preset
+
+## Preset（示例，简要）
+```json
+{
+  "time_defaults": { "timezone": "Asia/Shanghai" },
+  "limits": {
+    "maxRows": 3000000,
+    "maxFileSizeBytes": 4294967296,
+    "maxSources": 6,
+    "chunkSize": 200000,
+    "timeoutSec": 900,
+    "memoryGuardRatio": 0.6,
+    "hardMemCapGB": 8
+  },
+  "cache": { "engine": "redis", "ttlHours": 72 },
+
+  "datasets": {
+    "orders": { "type":"mongo_collection","mongo":{"db":"biz","collection":"orders"},
+      "time_rules": { "order_ts": {
+        "parse":{"kind":"auto","epoch_unit":"ms","formats":["%Y-%m-%d %H:%M:%S%.3f","%Y-%m-%d %H:%M:%S"]},
+        "source_tz":"Asia/Shanghai","target_tz":"Asia/Shanghai",
+        "align":{"method":"truncate","unit":"day"},"on_parse_fail":"as_null"
+      }}
+    },
+    "ads_csv": { "type":"csv_file","fileId":"f_ads","csv":{"delimiter":",","encoding":"utf-8","header_row":1},
+      "time_rules": { "date": {
+        "parse":{"kind":"string","formats":["%Y-%m-%d","%Y/%m/%d","%d.%m.%Y"]},
+        "source_tz":"UTC","target_tz":"Asia/Shanghai",
+        "align":{"method":"truncate","unit":"day"}
+      }}
+    },
+    "cost_xlsx": { "type":"excel_sheet","fileId":"f_cost","sheet":"成本","header_row":1 }
+  },
+
+  "dedup": {
+    "orders": { "keys":["sku","date_key","cluster"],"norm":["trim","upper","to_date"],
+      "hash_algo":"md5","null_in_key":"skip",
+      "on_conflict":{"strategy":"order_by","order":[{"field":"update_ts","dir":"desc"}]} },
+    "ads_csv": { "keys":["sku","date"],"norm":["trim","to_date"],"hash_algo":"md5","null_in_key":"skip",
+      "on_conflict":{"strategy":"keep_last","order":[{"field":"ingest_ts","dir":"desc"}]} },
+    "cost_xlsx": { "keys":["商品编码"],"norm":["trim"],"hash_algo":"md5","null_in_key":"placeholder" }
+  },
+
+  "joins": [
+    { "left":"orders","right":"ads_csv","type":"left",
+      "keys":[
+        { "leftKey":"order_ts","rightKey":"date","kind":"time",
+          "time":{"left":{"use":"dataset_rule"},"right":{"use":"dataset_rule"}}},
+        { "leftKey":"sku","rightKey":"sku" }
+      ]},
+    { "left":"orders","right":"cost_xlsx","type":"left",
+      "keys":[ { "leftKey":"sku","rightKey":"商品编码","kind":"string","string":{"norm":["trim","upper"]} } ]}
+  ],
+
+  "select": {
+    "orders":["date_key","sku","price","quantity","cluster"],
+    "ads_csv":["mb_spent","op_spent","impressions","clicks"],
+    "cost_xlsx":["商品编码","最新成本(руб)"]
+  },
+
+  "rename": { "最新成本(руб)":"cost_latest_rub","mb_spent":"mb_money_spent","op_spent":"op_money_spent" },
+  "conflictPrefix": { "orders":"o_","ads_csv":"a_","cost_xlsx":"c_" },
+
+  "nulls": {
+    "treat_as_null":["",""," ","N/A","—","NULL"],
+    "join_key_policy":"skip_if_null",
+    "fills":{
+      "cost_latest_rub":{"type":"fill_from_other","sources":["p_cost","a_cost","default:0"]},
+      "price":{"type":"fill_stat","stat":"median"},
+      "cluster":{"type":"fill_constant","value":"UNKNOWN"}
+    },
+    "thresholds":{"warn_if_null_pct_over":{"cost_latest_rub":0.05,"price":0.02}},
+    "drop_rules":[{"if_all_null":["impressions","clicks","mb_money_spent","op_money_spent"]}]
+  }
+}
+```
+
+## Quality Report（输出）
+- 总体：输入/输出行数、耗时、内存峰值、缓存命中。  
+- 去重：输入/输出行、去重率、重复组/TopN 样本、hash 碰撞率。  
+- 时间：解析成功率、格式命中分布、`source_tz→target_tz` 分布、`cross_midnight_shift`。  
+- Join/Append：未匹配行数与原因、多对多/放大预警、样本；Append 的列对齐与填充统计。  
+- 空值：列级 NULL% 与阈值预警、填充条数、未填充高风险列清单。  
+- 可下载报告 JSON。
+
+## Error Handling & Recovery（默认：警告继续）
+- **警告**：时间解析成功率 <90%、列 NULL% 超阈、重复键/放大风险、编码自动探测回退、窗口多对多风险。  
+- **失败**：内存/超时硬护栏、文件不可读（损坏/权限/编码无法解析且未覆盖）、非法时区/格式。  
+- **恢复**：Mongo 可恢复游标 + 指数退避（≤3 次）；文件解析保留失败样本，提示覆盖参数。
+
+## Security & Compliance
+- 上传校验扩展名/MIME/大小；可选病毒扫描。  
+- 字段白名单与参数校验；表达式/正则转义。  
+- 结果与 Preset 绑定工作区权限；Redis key 加租户前缀。
+
+## Implementation Plan
+
+### Phase 1（4周）
+- 后端：Polars 管线（去重/时间/Join/Append/落地/报告/Redis）。  
+- API：dataset/upload/register、join/preview/execute、result/{id}。
+
+### Phase 2（4周）
+- 前端：TS 化 + 数据源面板 + 连接向导 + 计划预览 + SSE 日志。  
+- 透视对接：`resultId` 适配与字段字典优化。
+
+### Phase 3（4周）
+- 性能调优（分块/落地/字典化/并发控制）。  
+- Preset 版本与共享、导出增强、可观测性指标完善。
+
+### Phase 4（2周）
+- 端到端测试、UAT 用例、UX 迭代与正式发布。
+
+## UAT Cases
+1) **三源 Join**：orders（Mongo）× ads（CSV）× cost（Excel）按 `Asia/Shanghai` 对齐到“天”，输出行 ≥ orders；报告完整。  
+2) **去重**：orders 组合键 `(sku,date_key,cluster)`，`keep_last by update_ts desc` 与手工一致。  
+3) **空值策略**：`skip_if_null` 跳过 NULL 键；改为 `outer_keep_unmatched` 时保留并标记。  
+4) **大规模**：CSV 2GB / 300 万行 + 集合 100 万行，15 分钟内完成，内存受控。  
+5) **编码混用**：手动覆盖编码后解析通过；失败样本保留。  
+6) **缓存命中**：相同 Preset + 源指纹命中 Redis 秒开。  
+7) **Append**：两月度 Excel 纵向合并列对齐正确，类型统一，缺列按规则填充。
+
+---
+
+> 备注：如需附带 **FastAPI+Polars+Redis** 的最小可运行骨架与前端 TS 改造清单，可在本 PRD 基础上继续输出。
