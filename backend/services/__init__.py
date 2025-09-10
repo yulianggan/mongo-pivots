@@ -7,3 +7,9 @@
 - 连接操作服务
 - 文件处理服务
 """
+
+from .join_service import JoinService
+from .preset_service import PresetService
+from .file_service import FileService
+
+__all__ = ['JoinService', 'PresetService', 'FileService']

@@ -18,11 +18,16 @@ from ...models.api.response_models import (
     JoinPreviewResponse, JoinExecuteResponse, TaskStatusResponse, 
     ResultResponse, ResourceEstimate, TaskProgress, TaskStatus
 )
+from ...services.join_service import JoinService
+from ...join_engine import JoinEngineError, JoinPlanningError, JoinExecutionError
 
 logger = logging.getLogger(__name__)
 
 # 创建路由器
 router = APIRouter()
+
+# 创建连接服务实例
+join_service = JoinService()
 
 
 @router.post(
@@ -54,81 +59,42 @@ async def preview_join(
         await _validate_join_request(request.operations, current_user.user_id)
         
         # 调用连接服务生成预览
-        # TODO: 实现连接服务调用
-        # preview_result = await join_service.generate_preview(
-        #     operations=request.operations,
-        #     output_columns=request.output_columns,
-        #     sample_size=request.sample_size,
-        #     user_id=current_user.user_id
-        # )
-        
-        # 临时模拟预览数据
-        preview_data = [
-            {
-                "u.id": 1,
-                "u.name": "Alice",
-                "u.email": "alice@example.com",
-                "o.user_id": 1,
-                "o.amount": 99.99,
-                "o.created_at": "2025-09-10T09:00:00Z"
-            },
-            {
-                "u.id": 2,
-                "u.name": "Bob",
-                "u.email": "bob@example.com",
-                "o.user_id": 2,
-                "o.amount": 149.99,
-                "o.created_at": "2025-09-10T09:30:00Z"
-            }
-        ]
-        
-        resource_estimate = ResourceEstimate(
-            estimated_rows=50000,
-            estimated_size_mb=12.5,
-            estimated_time_seconds=30.0,
-            memory_required_mb=256.0,
-            complexity_score=6.5
+        preview_result = await join_service.generate_preview(
+            operations=request.operations,
+            output_columns=request.output_columns,
+            sample_size=request.sample_size,
+            user_id=current_user.user_id
         )
         
-        plan = {
-            "steps": [
-                "加载左数据集 (users)",
-                "加载右数据集 (orders)", 
-                "应用数据过滤",
-                "执行内连接 (id = user_id)",
-                "选择输出列",
-                "返回结果"
-            ],
-            "optimizations": [
-                "基于连接键建立索引",
-                "使用分块处理避免内存溢出",
-                "应用列剪枝减少数据传输"
-            ],
-            "join_algorithm": "hash_join",
-            "estimated_partitions": 4
-        }
-        
-        warnings = []
-        
-        # 检查潜在问题
-        if resource_estimate.memory_required_mb > 1024:
-            warnings.append("预估内存使用量较高，建议分批处理")
-        
-        if resource_estimate.complexity_score > 8.0:
-            warnings.append("连接操作复杂度较高，执行时间可能较长")
-        
-        logger.info(f"连接预览生成成功，预估 {resource_estimate.estimated_rows} 行结果")
+        logger.info(f"连接预览生成成功，预估 {preview_result['resource_estimate'].estimated_rows} 行结果")
         
         return JoinPreviewResponse(
-            message=f"连接预览生成成功，预估产生 {resource_estimate.estimated_rows} 行结果",
-            preview_data=preview_data,
-            resource_estimate=resource_estimate,
-            plan=plan,
-            warnings=warnings
+            message=f"连接预览生成成功，预估产生 {preview_result['resource_estimate'].estimated_rows} 行结果",
+            preview_data=preview_result["preview_data"],
+            resource_estimate=preview_result["resource_estimate"],
+            plan=preview_result["plan"],
+            warnings=preview_result["warnings"]
         )
         
     except APIError:
         raise
+    except JoinPlanningError as e:
+        logger.error(f"连接计划失败: {str(e)}")
+        raise ValidationAPIError(f"连接计划失败: {str(e)}")
+    except JoinExecutionError as e:
+        logger.error(f"连接预览执行失败: {str(e)}")
+        raise APIError(
+            message=f"连接预览执行失败: {str(e)}",
+            error_code="PREVIEW_EXECUTION_FAILED",
+            status_code=500
+        )
+    except JoinEngineError as e:
+        logger.error(f"连接引擎错误: {str(e)}")
+        raise APIError(
+            message=f"连接引擎错误: {str(e)}",
+            error_code="JOIN_ENGINE_ERROR",
+            status_code=500
+        )
     except Exception as e:
         logger.error(f"连接预览失败: {str(e)}")
         raise APIError(
@@ -171,40 +137,58 @@ async def execute_join(
         # await quota_service.check_user_quota(current_user.user_id)
         
         # 创建连接任务
-        # TODO: 实现任务服务调用
-        # task = await task_service.create_join_task(
-        #     operations=request.operations,
-        #     output_columns=request.output_columns,
-        #     result_name=request.result_name,
-        #     save_result=request.save_result,
-        #     chunk_size=request.chunk_size,
-        #     user_id=current_user.user_id
-        # )
-        
-        # 临时模拟任务信息
-        task_id = "task_abc123def456"
-        
-        progress = TaskProgress(
-            current_step="初始化任务",
-            step_index=1,
-            total_steps=6,
-            progress_percent=0.0,
-            processed_rows=0,
-            total_rows=None
+        task_id = await join_service.create_join_task(
+            operations=request.operations,
+            output_columns=request.output_columns,
+            result_name=request.result_name,
+            save_result=request.save_result,
+            chunk_size=request.chunk_size,
+            user_id=current_user.user_id
         )
+        
+        # 获取任务状态信息
+        task_info = await join_service.get_task_status(task_id, current_user.user_id)
+        
+        # 估算完成时间（基于资源估算）
+        from datetime import datetime, timedelta
+        estimated_completion = datetime.utcnow() + timedelta(minutes=5)  # 默认5分钟
         
         logger.info(f"连接任务创建成功: {task_id}")
         
         return JoinExecuteResponse(
             message=f"连接任务 {task_id} 创建成功，正在处理中",
             task_id=task_id,
-            estimated_completion="2025-09-10T10:05:00Z",
-            status=TaskStatus.PENDING,
-            progress=progress
+            estimated_completion=estimated_completion.isoformat() + "Z",
+            status=task_info.status if task_info else TaskStatus.PENDING,
+            progress=task_info.progress if task_info else TaskProgress(
+                current_step="初始化任务",
+                step_index=1,
+                total_steps=6,
+                progress_percent=0.0,
+                processed_rows=0,
+                total_rows=None
+            )
         )
         
     except APIError:
         raise
+    except RuntimeError as e:
+        logger.error(f"任务创建失败: {str(e)}")
+        raise APIError(
+            message=str(e),
+            error_code="TASK_CREATION_FAILED",
+            status_code=409
+        )
+    except JoinPlanningError as e:
+        logger.error(f"连接计划失败: {str(e)}")
+        raise ValidationAPIError(f"连接计划失败: {str(e)}")
+    except JoinEngineError as e:
+        logger.error(f"连接引擎错误: {str(e)}")
+        raise APIError(
+            message=f"连接引擎错误: {str(e)}",
+            error_code="JOIN_ENGINE_ERROR",
+            status_code=500
+        )
     except Exception as e:
         logger.error(f"连接任务创建失败: {str(e)}")
         raise APIError(
@@ -239,29 +223,18 @@ async def get_task_status(
     
     try:
         # 获取任务状态
-        # TODO: 实现任务服务调用
-        # task = await task_service.get_task_status(task_id, current_user.user_id)
-        # if not task:
-        #     raise NotFoundAPIError("Task", task_id)
-        
-        # 临时模拟任务状态
-        progress = TaskProgress(
-            current_step="执行连接操作",
-            step_index=4,
-            total_steps=6,
-            progress_percent=75.0,
-            processed_rows=37500,
-            total_rows=50000
-        )
+        task_info = await join_service.get_task_status(task_id, current_user.user_id)
+        if not task_info:
+            raise NotFoundAPIError("Task", task_id)
         
         return TaskStatusResponse(
             task_id=task_id,
-            status=TaskStatus.RUNNING,
-            progress=progress,
-            started_at="2025-09-10T10:00:00Z",
-            completed_at=None,
-            result_id=None,
-            error_message=None
+            status=task_info.status,
+            progress=task_info.progress,
+            started_at=task_info.started_at.isoformat() + "Z" if task_info.started_at else None,
+            completed_at=task_info.completed_at.isoformat() + "Z" if task_info.completed_at else None,
+            result_id=task_info.result_id,
+            error_message=task_info.error_message
         )
         
     except APIError:
@@ -312,16 +285,15 @@ async def get_join_result(
             selected_columns = [col.strip() for col in columns.split(",")]
         
         # 获取结果数据
-        # TODO: 实现结果服务调用
-        # result = await result_service.get_result(
-        #     result_id=result_id,
-        #     offset=offset,
-        #     limit=limit,
-        #     columns=selected_columns,
-        #     user_id=current_user.user_id
-        # )
-        # if not result:
-        #     raise NotFoundAPIError("Result", result_id)
+        result = await join_service.get_result(
+            result_id=result_id,
+            offset=offset,
+            limit=limit,
+            columns=selected_columns,
+            user_id=current_user.user_id
+        )
+        if not result:
+            raise NotFoundAPIError("Result", result_id)
         
         # 如果请求非JSON格式，返回文件流
         if format != "json":
@@ -334,44 +306,14 @@ async def get_join_result(
                 current_user=current_user
             )
         
-        # 临时模拟结果数据
-        from ...models.api.response_models import ResultMetadata
-        
-        metadata = ResultMetadata(
-            result_id=result_id,
-            task_id="task_abc123def456",
-            rows=50000,
-            columns=5,
-            size_bytes=12582912,
-            created_at="2025-09-10T10:05:00Z",
-            expires_at=None
-        )
-        
-        data = [
-            {
-                "u.id": i,
-                "u.name": f"User{i}",
-                "u.email": f"user{i}@example.com",
-                "o.amount": i * 10.5,
-                "o.created_at": f"2025-09-10T{10 + (i % 12):02d}:00:00Z"
-            }
-            for i in range(offset + 1, min(offset + limit + 1, 101))
-        ]
-        
-        column_names = ["u.id", "u.name", "u.email", "o.amount", "o.created_at"]
-        if selected_columns:
-            # 过滤列
-            column_names = [col for col in column_names if col in selected_columns]
-            data = [{col: row[col] for col in column_names if col in row} for row in data]
-        
         return ResultResponse(
-            total=metadata.rows,
+            total=result["metadata"].rows,
             offset=offset,
             limit=limit,
-            has_more=(offset + limit) < metadata.rows,
-            metadata=metadata,
-            data=data,
-            columns=column_names
+            has_more=(offset + limit) < result["metadata"].rows,
+            metadata=result["metadata"],
+            data=result["data"],
+            columns=result["columns"]
         )
         
     except APIError:
@@ -405,21 +347,27 @@ async def cancel_task(
     
     try:
         # 获取任务信息并验证权限
-        # TODO: 实现任务服务调用
-        # task = await task_service.get_task(task_id, current_user.user_id)
-        # if not task:
-        #     raise NotFoundAPIError("Task", task_id)
+        task_info = await join_service.get_task_status(task_id, current_user.user_id)
+        if not task_info:
+            raise NotFoundAPIError("Task", task_id)
         
         # 检查任务状态
-        # if task.status not in [TaskStatus.PENDING, TaskStatus.RUNNING]:
-        #     raise APIError(
-        #         message=f"任务状态为 {task.status}，无法取消",
-        #         error_code="TASK_NOT_CANCELLABLE",
-        #         status_code=409
-        #     )
+        if task_info.status not in [TaskStatus.PENDING, TaskStatus.RUNNING]:
+            raise APIError(
+                message=f"任务状态为 {task_info.status.value}，无法取消",
+                error_code="TASK_NOT_CANCELLABLE",
+                status_code=409
+            )
         
         # 取消任务
-        # await task_service.cancel_task(task_id, current_user.user_id)
+        success = await join_service.cancel_task(task_id, current_user.user_id)
+        
+        if not success:
+            raise APIError(
+                message="任务取消失败",
+                error_code="CANCELLATION_FAILED",
+                status_code=500
+            )
         
         logger.info(f"任务取消成功: {task_id}")
         
