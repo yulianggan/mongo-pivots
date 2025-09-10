@@ -16,6 +16,7 @@ from ...models.api.response_models import (
     DatasetUploadResponse, DatasetPreviewResponse, APIResponse,
     DatasetInfo, FieldInfo
 )
+from ...services.file_service import file_service
 
 logger = logging.getLogger(__name__)
 
@@ -62,44 +63,43 @@ async def upload_dataset(
         file.file.seek(0)  # 重置文件指针以供后续处理
         
         # 调用文件服务处理上传
-        # TODO: 实现文件服务调用
-        # result = await file_service.process_upload(
-        #     file=file,
-        #     content=file_content,
-        #     sheet=sheet,
-        #     start_row=start_row,
-        #     encoding=encoding,
-        #     separator=separator,
-        #     user_id=current_user.user_id
-        # )
-        
-        # 临时模拟响应数据
-        dataset_info = DatasetInfo(
-            dataset_id="ds_temp_123",
-            name=file.filename or "unknown",
-            description=None,
-            rows=1000,
-            columns=5,
-            size_bytes=len(file_content),
-            created_at="2025-09-10T10:00:00Z",
-            updated_at="2025-09-10T10:00:00Z",
-            file_type=file.filename.split('.')[-1] if file.filename else "unknown",
-            encoding=encoding or "utf-8"
+        result = await file_service.process_upload(
+            file=file,
+            content=file_content,
+            sheet=sheet,
+            start_row=start_row,
+            encoding=encoding,
+            separator=separator,
+            user_id=current_user.user_id
         )
         
+        # 转换为API响应格式
+        dataset_metadata = result['dataset_info']
+        
+        dataset_info = DatasetInfo(
+            dataset_id=dataset_metadata['dataset_id'],
+            name=dataset_metadata['name'],
+            description=dataset_metadata['description'],
+            rows=dataset_metadata['rows'],
+            columns=dataset_metadata['columns'],
+            size_bytes=dataset_metadata['size_bytes'],
+            created_at=dataset_metadata['created_at'],
+            updated_at=dataset_metadata['updated_at'],
+            file_type=dataset_metadata['file_type'],
+            encoding=dataset_metadata['encoding']
+        )
+        
+        # 转换字段信息
         fields = [
             FieldInfo(
-                name="id",
-                data_type="Int64",
-                nullable=False,
-                unique_count=1000,
-                null_count=0,
-                sample_values=[1, 2, 3, 4, 5]
+                name=field['name'],
+                data_type=field['data_type'],
+                nullable=field['nullable'],
+                unique_count=field['unique_count'],
+                null_count=field['null_count'],
+                sample_values=field['sample_values']
             )
-        ]
-        
-        preview = [
-            {"id": 1, "name": "Sample", "value": 100}
+            for field in result['field_info']
         ]
         
         logger.info(f"数据集上传成功: {dataset_info.dataset_id}")
@@ -108,7 +108,7 @@ async def upload_dataset(
             message=f"数据集 '{file.filename}' 上传成功",
             dataset=dataset_info,
             fields=fields,
-            preview=preview
+            preview=result['preview_data']
         )
         
     except APIError:
@@ -148,47 +148,38 @@ async def preview_dataset(
     logger.info(f"用户 {current_user.user_id} 预览数据集: {dataset_id}")
     
     try:
-        # 验证数据集是否存在
-        # TODO: 实现数据集服务调用
-        # dataset = await dataset_service.get_dataset(dataset_id, current_user.user_id)
-        # if not dataset:
-        #     raise NotFoundAPIError("Dataset", dataset_id)
-        
-        # 获取数据预览
-        # data = await dataset_service.get_preview(
-        #     dataset_id=dataset_id,
-        #     offset=offset,
-        #     limit=limit,
-        #     columns=columns,
-        #     user_id=current_user.user_id
-        # )
-        
-        # 临时模拟响应数据
-        dataset_info = DatasetInfo(
+        # 调用文件服务获取数据预览
+        result = await file_service.get_dataset_preview(
             dataset_id=dataset_id,
-            name="sample_dataset.csv",
-            description="示例数据集",
-            rows=10000,
-            columns=5,
-            size_bytes=2048000,
-            created_at="2025-09-10T10:00:00Z",
-            updated_at="2025-09-10T10:00:00Z",
-            file_type="csv",
-            encoding="utf-8"
-        )
-        
-        data = [
-            {"id": i, "name": f"Record {i}", "value": i * 10}
-            for i in range(offset + 1, min(offset + limit + 1, 101))
-        ]
-        
-        return DatasetPreviewResponse(
-            total=10000,
             offset=offset,
             limit=limit,
-            has_more=(offset + limit) < 10000,
+            columns=columns,
+            user_id=current_user.user_id
+        )
+        
+        # 转换为API响应格式
+        dataset_metadata = result['dataset_info']
+        
+        dataset_info = DatasetInfo(
+            dataset_id=dataset_metadata['dataset_id'],
+            name=dataset_metadata['name'],
+            description=dataset_metadata['description'],
+            rows=dataset_metadata['rows'],
+            columns=dataset_metadata['columns'],
+            size_bytes=dataset_metadata['size_bytes'],
+            created_at=dataset_metadata['created_at'],
+            updated_at=dataset_metadata['updated_at'],
+            file_type=dataset_metadata['file_type'],
+            encoding=dataset_metadata['encoding']
+        )
+        
+        return DatasetPreviewResponse(
+            total=result['total_rows'],
+            offset=result['offset'],
+            limit=result['limit'],
+            has_more=result['has_more'],
             dataset=dataset_info,
-            data=data
+            data=result['data']
         )
         
     except APIError:
@@ -226,29 +217,29 @@ async def list_datasets(
     logger.info(f"用户 {current_user.user_id} 获取数据集列表")
     
     try:
-        # TODO: 实现数据集服务调用
-        # datasets = await dataset_service.list_datasets(
-        #     user_id=current_user.user_id,
-        #     offset=offset,
-        #     limit=limit,
-        #     search=search
-        # )
+        # 调用文件服务获取数据集列表
+        datasets_data = await file_service.list_datasets(
+            user_id=current_user.user_id,
+            offset=offset,
+            limit=limit,
+            search=search
+        )
         
-        # 临时模拟数据
+        # 转换为API响应格式
         datasets = [
             DatasetInfo(
-                dataset_id=f"ds_{i}",
-                name=f"dataset_{i}.csv",
-                description=f"数据集 {i}",
-                rows=1000 * i,
-                columns=5,
-                size_bytes=1024000 * i,
-                created_at="2025-09-10T10:00:00Z",
-                updated_at="2025-09-10T10:00:00Z",
-                file_type="csv",
-                encoding="utf-8"
+                dataset_id=dataset['dataset_id'],
+                name=dataset['name'],
+                description=dataset['description'],
+                rows=dataset['rows'],
+                columns=dataset['columns'],
+                size_bytes=dataset['size_bytes'],
+                created_at=dataset['created_at'],
+                updated_at=dataset['updated_at'],
+                file_type=dataset['file_type'],
+                encoding=dataset['encoding']
             )
-            for i in range(1, min(limit + 1, 6))
+            for dataset in datasets_data
         ]
         
         return datasets
@@ -284,28 +275,20 @@ async def delete_dataset(
     logger.info(f"用户 {current_user.user_id} 删除数据集: {dataset_id}")
     
     try:
-        # 验证数据集存在且用户有权限删除
-        # TODO: 实现数据集服务调用
-        # dataset = await dataset_service.get_dataset(dataset_id, current_user.user_id)
-        # if not dataset:
-        #     raise NotFoundAPIError("Dataset", dataset_id)
+        # 调用文件服务删除数据集
+        success = await file_service.delete_dataset(dataset_id, current_user.user_id)
         
-        # 检查数据集是否被其他任务使用
-        # if await dataset_service.is_dataset_in_use(dataset_id):
-        #     raise APIError(
-        #         message="数据集正在被其他任务使用，无法删除",
-        #         error_code="DATASET_IN_USE",
-        #         status_code=409
-        #     )
-        
-        # 删除数据集
-        # await dataset_service.delete_dataset(dataset_id, current_user.user_id)
-        
-        logger.info(f"数据集删除成功: {dataset_id}")
-        
-        return APIResponse(
-            message=f"数据集 {dataset_id} 删除成功"
-        )
+        if success:
+            logger.info(f"数据集删除成功: {dataset_id}")
+            return APIResponse(
+                message=f"数据集 {dataset_id} 删除成功"
+            )
+        else:
+            raise APIError(
+                message="数据集删除失败",
+                error_code="DELETE_FAILED",
+                status_code=500
+            )
         
     except APIError:
         raise
@@ -344,21 +327,12 @@ async def download_dataset(
         if format not in ["csv", "json", "parquet"]:
             raise ValidationAPIError("不支持的下载格式")
         
-        # 验证数据集存在
-        # TODO: 实现数据集服务调用
-        # dataset = await dataset_service.get_dataset(dataset_id, current_user.user_id)
-        # if not dataset:
-        #     raise NotFoundAPIError("Dataset", dataset_id)
-        
-        # 生成文件流
-        # file_stream = await dataset_service.export_dataset(
-        #     dataset_id=dataset_id,
-        #     format=format,
-        #     user_id=current_user.user_id
-        # )
-        
-        # 临时模拟文件内容
-        content = "id,name,value\n1,Sample,100\n2,Test,200\n"
+        # 调用文件服务导出数据集
+        file_content = await file_service.export_dataset(
+            dataset_id=dataset_id,
+            format=format,
+            user_id=current_user.user_id
+        )
         
         filename = f"{dataset_id}.{format}"
         content_type = {
@@ -368,7 +342,7 @@ async def download_dataset(
         }[format]
         
         def generate():
-            yield content.encode()
+            yield file_content
         
         return StreamingResponse(
             generate(),

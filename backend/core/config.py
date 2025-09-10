@@ -36,6 +36,27 @@ class PerformanceConfig:
     optimize_large_files: bool = True  # 自动优化大文件处理
 
 
+@dataclass
+class RedisConfig:
+    """Redis配置"""
+    url: str = "redis://localhost:6379"  # Redis连接URL
+    max_connections: int = 20  # 最大连接数
+    retry_on_timeout: bool = True  # 超时重试
+    decode_responses: bool = True  # 自动解码响应
+    socket_timeout: float = 5.0  # Socket超时（秒）
+    connection_timeout: float = 5.0  # 连接超时（秒）
+    
+    # SSE相关配置
+    heartbeat_interval: int = 30  # 心跳间隔（秒）
+    connection_timeout_sse: int = 300  # SSE连接超时（秒）
+    message_buffer_size: int = 1000  # 消息缓冲区大小
+    
+    # 任务管理相关
+    task_ttl_seconds: int = 86400  # 任务TTL（24小时）
+    result_ttl_seconds: int = 86400  # 结果TTL（24小时）
+    max_concurrent_tasks: int = 5  # 最大并发任务数
+
+
 class ConfigManager:
     """配置管理器"""
     
@@ -43,6 +64,7 @@ class ConfigManager:
         self.memory = MemoryConfig()
         self.polars = PolarsConfig()
         self.performance = PerformanceConfig()
+        self.redis = RedisConfig()
         self._load_from_env()
     
     def _load_from_env(self):
@@ -76,6 +98,25 @@ class ConfigManager:
         
         if os.getenv('POLARS_ENABLE_PROFILING'):
             self.performance.enable_profiling = os.getenv('POLARS_ENABLE_PROFILING').lower() == 'true'
+        
+        # Redis配置
+        if os.getenv('REDIS_URL'):
+            self.redis.url = os.getenv('REDIS_URL')
+        
+        if os.getenv('REDIS_MAX_CONNECTIONS'):
+            self.redis.max_connections = int(os.getenv('REDIS_MAX_CONNECTIONS'))
+        
+        if os.getenv('SSE_HEARTBEAT_INTERVAL'):
+            self.redis.heartbeat_interval = int(os.getenv('SSE_HEARTBEAT_INTERVAL'))
+        
+        if os.getenv('SSE_CONNECTION_TIMEOUT'):
+            self.redis.connection_timeout_sse = int(os.getenv('SSE_CONNECTION_TIMEOUT'))
+        
+        if os.getenv('SSE_MESSAGE_BUFFER_SIZE'):
+            self.redis.message_buffer_size = int(os.getenv('SSE_MESSAGE_BUFFER_SIZE'))
+        
+        if os.getenv('MAX_CONCURRENT_TASKS'):
+            self.redis.max_concurrent_tasks = int(os.getenv('MAX_CONCURRENT_TASKS'))
     
     def get_memory_limit_bytes(self) -> int:
         """获取内存限制（字节）"""
@@ -128,6 +169,14 @@ class ConfigManager:
                 'enable_profiling': self.performance.enable_profiling,
                 'log_slow_operations': self.performance.log_slow_operations,
                 'slow_operation_threshold_ms': self.performance.slow_operation_threshold_ms
+            },
+            'redis': {
+                'url': self.redis.url,
+                'max_connections': self.redis.max_connections,
+                'heartbeat_interval': self.redis.heartbeat_interval,
+                'connection_timeout_sse': self.redis.connection_timeout_sse,
+                'message_buffer_size': self.redis.message_buffer_size,
+                'max_concurrent_tasks': self.redis.max_concurrent_tasks
             }
         }
 

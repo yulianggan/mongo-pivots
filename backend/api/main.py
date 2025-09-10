@@ -11,6 +11,7 @@ from .middleware.error_handler import add_error_handlers
 from .middleware.rate_limiter import add_rate_limiter
 from .middleware.auth import add_auth_middleware
 from .routers import dataset, join, preset, progress
+from ..services.sse_service import sse_service
 
 
 def create_app(
@@ -73,6 +74,28 @@ def create_app(
     async def health():
         """API健康检查"""
         return {"status": "ok", "version": version}
+    
+    # 添加启动和关闭事件处理器
+    @app.on_event("startup")
+    async def startup_event():
+        """应用启动事件处理器"""
+        try:
+            await sse_service.initialize()
+        except Exception as e:
+            # 记录错误但不阻止应用启动
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to initialize SSE service: {e}")
+    
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        """应用关闭事件处理器"""
+        try:
+            await sse_service.shutdown()
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error during SSE service shutdown: {e}")
     
     return app
 

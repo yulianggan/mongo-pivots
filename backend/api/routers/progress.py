@@ -15,107 +15,16 @@ from sse_starlette.sse import EventSourceResponse
 
 from ..middleware.auth import get_current_user, User
 from ..middleware.error_handler import APIError, NotFoundAPIError
+from ...services.sse_service import sse_service
+from ...services.join_service import JoinService
 
 logger = logging.getLogger(__name__)
 
 # 创建路由器
 router = APIRouter()
 
-# 全局连接管理器
-class SSEConnectionManager:
-    """SSE连接管理器"""
-    
-    def __init__(self):
-        self.active_connections: Dict[str, Dict[str, Any]] = {}
-    
-    async def connect(self, task_id: str, user_id: str, connection_id: str):
-        """添加新连接"""
-        if task_id not in self.active_connections:
-            self.active_connections[task_id] = {}
-        
-        self.active_connections[task_id][connection_id] = {
-            "user_id": user_id,
-            "connected_at": datetime.utcnow(),
-            "queue": asyncio.Queue()
-        }
-        
-        logger.info(f"SSE连接建立: task_id={task_id}, user_id={user_id}, connection_id={connection_id}")
-    
-    async def disconnect(self, task_id: str, connection_id: str):
-        """移除连接"""
-        if task_id in self.active_connections and connection_id in self.active_connections[task_id]:
-            del self.active_connections[task_id][connection_id]
-            
-            # 如果没有更多连接，清理任务
-            if not self.active_connections[task_id]:
-                del self.active_connections[task_id]
-            
-            logger.info(f"SSE连接断开: task_id={task_id}, connection_id={connection_id}")
-    
-    async def send_progress_update(self, task_id: str, progress_data: Dict[str, Any]):
-        """向指定任务的所有连接发送进度更新"""
-        if task_id not in self.active_connections:
-            return
-        
-        message = {
-            "type": "progress",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "data": progress_data
-        }
-        
-        # 向所有连接发送消息
-        for connection_id, connection_info in self.active_connections[task_id].items():
-            try:
-                await connection_info["queue"].put(message)
-            except Exception as e:
-                logger.error(f"发送进度更新失败: {e}")
-    
-    async def send_task_completion(self, task_id: str, result_data: Dict[str, Any]):
-        """发送任务完成通知"""
-        if task_id not in self.active_connections:
-            return
-        
-        message = {
-            "type": "completed",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "data": result_data
-        }
-        
-        # 向所有连接发送完成消息
-        for connection_id, connection_info in self.active_connections[task_id].items():
-            try:
-                await connection_info["queue"].put(message)
-            except Exception as e:
-                logger.error(f"发送完成通知失败: {e}")
-    
-    async def send_error(self, task_id: str, error_data: Dict[str, Any]):
-        """发送错误通知"""
-        if task_id not in self.active_connections:
-            return
-        
-        message = {
-            "type": "error",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "data": error_data
-        }
-        
-        # 向所有连接发送错误消息
-        for connection_id, connection_info in self.active_connections[task_id].items():
-            try:
-                await connection_info["queue"].put(message)
-            except Exception as e:
-                logger.error(f"发送错误通知失败: {e}")
-    
-    def get_connection_count(self, task_id: str) -> int:
-        """获取指定任务的连接数"""
-        return len(self.active_connections.get(task_id, {}))
-    
-    def get_total_connections(self) -> int:
-        """获取总连接数"""
-        return sum(len(connections) for connections in self.active_connections.values())
-
-# 全局连接管理器实例
-connection_manager = SSEConnectionManager()
+# 创建JoinService实例
+join_service = JoinService()
 
 
 @router.get(
@@ -154,42 +63,50 @@ async def stream_progress(
     
     try:
         # 验证任务存在且用户有权限访问
-        # TODO: 实现任务验证
-        # task = await task_service.get_task(task_id, current_user.user_id)
-        # if not task:
-        #     raise NotFoundAPIError("Task", task_id)
+        task_info = await join_service.get_task_status(task_id, current_user.user_id)
+        if not task_info:
+            raise NotFoundAPIError("Task", task_id)
         
         # 生成连接ID
         connection_id = f"{current_user.user_id}_{datetime.utcnow().timestamp()}"
         
+        # 注册SSE连接
+        message_queue = await sse_service.register_connection(
+            connection_id, task_id, current_user.user_id
+        )
+        
         # 创建事件生成器
         async def event_generator():
             try:
-                # 注册连接
-                await connection_manager.connect(task_id, current_user.user_id, connection_id)
+                # 发送当前任务状态
+                current_status = {
+                    "status": task_info.status.value,
+                    "progress": {
+                        "current_step": task_info.progress.current_step,
+                        "step_index": task_info.progress.step_index,
+                        "total_steps": task_info.progress.total_steps,
+                        "progress_percent": task_info.progress.progress_percent,
+                        "processed_rows": task_info.progress.processed_rows,
+                        "total_rows": task_info.progress.total_rows
+                    } if task_info.progress else None,
+                    "created_at": task_info.created_at.isoformat() + "Z",
+                    "started_at": task_info.started_at.isoformat() + "Z" if task_info.started_at else None,
+                    "completed_at": task_info.completed_at.isoformat() + "Z" if task_info.completed_at else None,
+                    "result_id": task_info.result_id,
+                    "error_message": task_info.error_message
+                }
                 
-                # 发送连接确认消息
                 yield {
-                    "event": "connected",
+                    "event": "status",
                     "data": json.dumps({
                         "task_id": task_id,
-                        "connection_id": connection_id,
-                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                        "user_id": current_user.user_id,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "data": current_status
                     })
                 }
                 
-                # 发送当前任务状态（如果任务已存在）
-                # TODO: 获取当前任务状态
-                # current_status = await task_service.get_current_status(task_id)
-                # if current_status:
-                #     yield {
-                #         "event": "status",
-                #         "data": json.dumps(current_status)
-                #     }
-                
                 # 监听进度更新
-                connection_info = connection_manager.active_connections[task_id][connection_id]
-                
                 while True:
                     # 检查客户端是否断开连接
                     if await request.is_disconnected():
@@ -199,42 +116,39 @@ async def stream_progress(
                     try:
                         # 等待消息，设置超时避免长时间阻塞
                         message = await asyncio.wait_for(
-                            connection_info["queue"].get(),
+                            message_queue.get(),
                             timeout=30.0  # 30秒超时
                         )
                         
-                        yield {
-                            "event": message["type"],
-                            "data": json.dumps(message)
-                        }
+                        # 转换为SSE格式并发送
+                        sse_event = message.to_sse_format()
+                        yield sse_event
                         
                         # 如果是完成或错误消息，结束连接
-                        if message["type"] in ["completed", "error"]:
+                        if message.event_type in ["completed", "error"]:
                             break
                             
                     except asyncio.TimeoutError:
-                        # 发送心跳保持连接
-                        yield {
-                            "event": "heartbeat",
-                            "data": json.dumps({
-                                "timestamp": datetime.utcnow().isoformat() + "Z",
-                                "connections": connection_manager.get_connection_count(task_id)
-                            })
-                        }
+                        # 超时时继续循环，心跳由SSE服务处理
+                        continue
                     
             except Exception as e:
                 logger.error(f"SSE事件生成器错误: {e}")
                 yield {
                     "event": "error",
                     "data": json.dumps({
-                        "error_code": "SSE_ERROR",
-                        "message": str(e),
-                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                        "task_id": task_id,
+                        "user_id": current_user.user_id,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "data": {
+                            "error_code": "SSE_ERROR",
+                            "message": str(e)
+                        }
                     })
                 }
             finally:
                 # 清理连接
-                await connection_manager.disconnect(task_id, connection_id)
+                await sse_service.disconnect_client(connection_id)
         
         return EventSourceResponse(
             event_generator(),
@@ -273,29 +187,15 @@ async def get_connection_stats(
     - 总连接数
     - 各任务的连接数
     - 活跃连接信息
+    - Redis连接状态
+    - 系统统计信息
     """
     # 这里可以添加管理员权限检查
     # if not current_user.has_permission("admin"):
     #     raise AuthorizationAPIError("需要管理员权限")
     
-    stats = {
-        "total_connections": connection_manager.get_total_connections(),
-        "active_tasks": len(connection_manager.active_connections),
-        "task_connections": {}
-    }
-    
-    for task_id, connections in connection_manager.active_connections.items():
-        stats["task_connections"][task_id] = {
-            "connection_count": len(connections),
-            "connections": [
-                {
-                    "connection_id": conn_id,
-                    "user_id": conn_info["user_id"],
-                    "connected_at": conn_info["connected_at"].isoformat() + "Z"
-                }
-                for conn_id, conn_info in connections.items()
-            ]
-        }
+    # 获取SSE服务统计信息
+    stats = await sse_service.get_connection_stats()
     
     return stats
 
@@ -330,7 +230,7 @@ async def simulate_task_progress(task_id: str):
             "total_rows": 50000 if progress < 100 else 50000
         }
         
-        await connection_manager.send_progress_update(task_id, progress_data)
+        await sse_service.notify_task_progress(task_id, progress_data)
         
         if progress == 100:
             # 发送完成通知
@@ -343,7 +243,7 @@ async def simulate_task_progress(task_id: str):
                     "success": True
                 }
             }
-            await connection_manager.send_task_completion(task_id, completion_data)
+            await sse_service.notify_task_completed(task_id, completion_data)
             break
 
 
@@ -374,7 +274,7 @@ async def test_progress_push(
     }
 
 
-# 提供给其他模块使用的接口
+# 提供给其他模块使用的接口（向后兼容）
 async def notify_task_progress(task_id: str, progress_data: Dict[str, Any]):
     """
     发送任务进度通知（供其他模块调用）
@@ -383,7 +283,7 @@ async def notify_task_progress(task_id: str, progress_data: Dict[str, Any]):
         task_id: 任务ID
         progress_data: 进度数据
     """
-    await connection_manager.send_progress_update(task_id, progress_data)
+    await sse_service.notify_task_progress(task_id, progress_data)
 
 
 async def notify_task_completion(task_id: str, result_data: Dict[str, Any]):
@@ -394,7 +294,7 @@ async def notify_task_completion(task_id: str, result_data: Dict[str, Any]):
         task_id: 任务ID
         result_data: 结果数据
     """
-    await connection_manager.send_task_completion(task_id, result_data)
+    await sse_service.notify_task_completed(task_id, result_data)
 
 
 async def notify_task_error(task_id: str, error_data: Dict[str, Any]):
@@ -405,4 +305,4 @@ async def notify_task_error(task_id: str, error_data: Dict[str, Any]):
         task_id: 任务ID
         error_data: 错误数据
     """
-    await connection_manager.send_error(task_id, error_data)
+    await sse_service.notify_task_error(task_id, error_data)

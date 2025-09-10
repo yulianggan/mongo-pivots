@@ -20,7 +20,7 @@ from ..join_engine import (
     ExecutionProgress, ExecutionStats, 
     JoinEngineError, JoinPlanningError, JoinExecutionError
 )
-from ..core.config import settings
+from ..core.config import config
 from ..connectors.registry import registry
 from ..models.api.request_models import (
     JoinOperation, JoinPreviewRequest, JoinExecuteRequest
@@ -32,6 +32,12 @@ from ..models.api.response_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 延迟导入避免循环依赖
+def get_sse_service():
+    """获取SSE服务实例（延迟导入）"""
+    from .sse_service import sse_service
+    return sse_service
 
 
 class TaskInfo(BaseModel):
@@ -76,9 +82,9 @@ class JoinService:
         self._task_locks: Dict[str, asyncio.Lock] = {}
         
         # 配置
-        self._max_concurrent_tasks = getattr(settings, 'max_concurrent_tasks', 5)
-        self._result_ttl_hours = getattr(settings, 'result_ttl_hours', 24)
-        self._max_preview_rows = getattr(settings, 'max_preview_rows', 1000)
+        self._max_concurrent_tasks = config.redis.max_concurrent_tasks
+        self._result_ttl_hours = config.redis.result_ttl_seconds // 3600  # 转换为小时
+        self._max_preview_rows = 1000
         
         self._logger.info("JoinService initialized")
     
@@ -648,6 +654,7 @@ class JoinService:
         
         async with self._task_locks.get(task_id, asyncio.Lock()):
             task_info = self._tasks[task_id]
+            old_status = task_info.status
             task_info.status = status
             
             if progress:
@@ -660,6 +667,62 @@ class JoinService:
                 task_info.result_id = result_id
             if error_message:
                 task_info.error_message = error_message
+        
+        # 发送SSE通知
+        try:
+            sse_service = get_sse_service()
+            
+            # 发送进度更新（如果有进度信息）
+            if progress:
+                await sse_service.notify_task_progress(task_id, {
+                    "current_step": progress.current_step,
+                    "step_index": progress.step_index,
+                    "total_steps": progress.total_steps,
+                    "progress_percent": progress.progress_percent,
+                    "processed_rows": progress.processed_rows,
+                    "total_rows": progress.total_rows
+                })
+            
+            # 发送状态更新
+            status_data = {
+                "status": status.value,
+                "task_id": task_id,
+                "user_id": task_info.user_id,
+                "updated_at": datetime.utcnow().isoformat() + "Z"
+            }
+            
+            if started_at:
+                status_data["started_at"] = started_at.isoformat() + "Z"
+            if completed_at:
+                status_data["completed_at"] = completed_at.isoformat() + "Z"
+            if result_id:
+                status_data["result_id"] = result_id
+            if error_message:
+                status_data["error_message"] = error_message
+            
+            await sse_service.notify_task_status(task_id, status_data)
+            
+            # 特殊处理完成和错误状态
+            if status == TaskStatus.COMPLETED and result_id:
+                await sse_service.notify_task_completed(task_id, {
+                    "task_id": task_id,
+                    "result_id": result_id,
+                    "completed_at": completed_at.isoformat() + "Z" if completed_at else None,
+                    "summary": {
+                        "total_rows": progress.total_rows if progress else 0,
+                        "success": True
+                    }
+                })
+            elif status == TaskStatus.FAILED:
+                await sse_service.notify_task_error(task_id, {
+                    "task_id": task_id,
+                    "error_message": error_message or "任务执行失败",
+                    "failed_at": completed_at.isoformat() + "Z" if completed_at else None,
+                    "error_code": "TASK_EXECUTION_FAILED"
+                })
+                
+        except Exception as e:
+            self._logger.warning(f"Failed to send SSE notification for task {task_id}: {e}")
     
     async def _create_task_result(
         self,
