@@ -9,10 +9,8 @@ import {
 
 class ApiService {
   private client: AxiosInstance
-  private baseUrl: string
 
   constructor(baseUrl: string = 'http://localhost:8000') {
-    this.baseUrl = baseUrl
     this.client = axios.create({
       baseURL: baseUrl,
       timeout: 30000,
@@ -33,7 +31,6 @@ class ApiService {
   }
 
   setBaseUrl(baseUrl: string): void {
-    this.baseUrl = baseUrl
     this.client.defaults.baseURL = baseUrl
   }
 
