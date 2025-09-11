@@ -10,7 +10,7 @@ from typing import List, Optional
 from .middleware.error_handler import add_error_handlers
 from .middleware.rate_limiter import add_rate_limiter
 from .middleware.auth import add_auth_middleware
-from .routers import dataset, join, preset, progress
+from .routers import dataset, join, preset, progress, pivot
 from ..services.sse_service import sse_service
 
 
@@ -133,4 +133,11 @@ def register_routers(app: FastAPI) -> None:
         progress.router,
         prefix="/api/join",  # 与join路由共享前缀
         tags=["progress"]
+    )
+    
+    # 透视分析路由
+    app.include_router(
+        pivot.router,
+        prefix="/api/pivot",
+        tags=["pivot"]
     )

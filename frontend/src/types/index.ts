@@ -45,8 +45,16 @@ export interface ApiHealthResponse {
   timestamp?: string
 }
 
+export interface CollectionInfo {
+  name: string
+  count: number
+  description: string
+}
+
 export interface ApiCollectionsResponse {
-  collections: string[]
+  success: boolean
+  collections: CollectionInfo[]
+  error?: string
 }
 
 export interface ApiDataResponse {

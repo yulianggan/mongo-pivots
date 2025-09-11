@@ -9,9 +9,9 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from connectors.base import DataSourceConnector
-from connectors.registry import registry
-from core.memory_guard import memory_guard
+from .connectors.base import DataSourceConnector
+from .connectors.registry import registry
+from .core.memory_guard import memory_guard
 
 # 导入核心组件
 from .planner import (

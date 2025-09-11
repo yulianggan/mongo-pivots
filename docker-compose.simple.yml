@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./backend
+    container_name: mongo-pivot-backend
+    environment:
+      - PORT=8000
+    ports: 
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.simple
+    container_name: mongo-pivot-frontend
+    environment: 
+      - API_BASE=http://localhost:8000
+    ports: 
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

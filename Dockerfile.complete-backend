@@ -1,0 +1,46 @@
+# Mac M1/M2 完整MongoDB后端Dockerfile
+FROM --platform=linux/arm64 python:3.11-slim
+
+WORKDIR /app
+
+# 安装系统依赖（ARM64优化 + 网络重试）
+RUN apt-get update && \
+    for i in {1..3}; do \
+        apt-get install -y \
+            curl \
+            gcc \
+            g++ \
+        && break || \
+        (echo "Attempt $i failed, retrying..." && sleep 5); \
+    done && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+# 复制完整MongoDB后端文件
+COPY complete_mongo_backend.py /app/
+
+# 安装Python依赖（针对ARM64优化 + 完整功能支持）
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn[standard] \
+    pymongo \
+    pandas \
+    chardet \
+    openpyxl \
+    python-multipart
+
+# 设置环境变量
+ENV PORT=8000
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health || exit 1
+
+# 启动命令
+CMD ["python", "complete_mongo_backend.py"]

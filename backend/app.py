@@ -48,7 +48,9 @@ def engine_status():
     }
 
 @app.get("/api/collections")
-def collections(): return {"collections": list_collections()}
+def collections(): 
+    collections_data = list_collections()
+    return {"success": True, "collections": collections_data}
 
 @app.get("/api/fields")
 def fields(collection:str, sample:int=200): 

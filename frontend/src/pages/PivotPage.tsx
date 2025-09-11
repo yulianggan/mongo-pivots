@@ -8,10 +8,12 @@ import {
 import { useAppSelector } from '@/hooks/redux'
 import { useData } from '@/hooks/useApi'
 import { LoadingSpinner, ErrorAlert, DataTable } from '@/components/common'
-import { PivotLayout } from '@/components/pivot/PivotLayout'
+import { EnhancedPivotLayout } from '@/components/pivot/EnhancedPivotLayout'
+import { EnhancedPivotTable } from '@/components/pivot/EnhancedPivotTable'
 
 export const PivotPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState(0)
+  const [pivotResult, setPivotResult] = useState<any>(null)
   const { config, error } = useAppSelector((state) => state.app)
   const { data: pivotData, isLoading, error: dataError, refetch } = useData(
     config.collection, 
@@ -89,6 +91,12 @@ export const PivotPage: React.FC = () => {
             iconPosition="start"
           />
           <Tab 
+            icon={<PivotIcon />} 
+            label="透视表结果" 
+            iconPosition="start"
+            disabled={!pivotResult}
+          />
+          <Tab 
             icon={<RawDataIcon />} 
             label="原始数据" 
             iconPosition="start"
@@ -99,10 +107,26 @@ export const PivotPage: React.FC = () => {
       
       {/* Tab Content */}
       {activeTab === 0 && (
-        <PivotLayout />
+        <EnhancedPivotLayout 
+          data={pivotData || []}
+          availableFields={pivotData && pivotData.length > 0 ? Object.keys(pivotData[0]) : []}
+          fieldTypes={pivotData && pivotData.length > 0 ? 
+            Object.keys(pivotData[0]).reduce((acc, key) => ({
+              ...acc,
+              [key]: typeof pivotData[0][key]
+            }), {}) : {}}
+          onPivotUpdate={(result) => {
+            setPivotResult(result)
+            setActiveTab(1) // 自动切换到透视表结果页面
+          }}
+        />
       )}
       
-      {activeTab === 1 && pivotData && pivotData.length > 0 && (
+      {activeTab === 1 && (
+        <EnhancedPivotTable pivotResult={pivotResult} />
+      )}
+      
+      {activeTab === 2 && pivotData && pivotData.length > 0 && (
         <DataTable
           data={pivotData}
           title="原始数据预览"
@@ -112,7 +136,7 @@ export const PivotPage: React.FC = () => {
         />
       )}
       
-      {activeTab === 1 && pivotData && pivotData.length === 0 && (
+      {activeTab === 2 && pivotData && pivotData.length === 0 && (
         <Card>
           <CardContent sx={{ textAlign: 'center', py: 4 }}>
             <Typography color="text.secondary">

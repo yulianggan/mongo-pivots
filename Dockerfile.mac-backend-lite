@@ -1,0 +1,37 @@
+# Mac M1/M2 轻量级后端Dockerfile - 避免网络问题
+FROM --platform=linux/arm64 python:3.11-alpine
+
+WORKDIR /app
+
+# 使用Alpine包管理器（更稳定的ARM64支持）
+RUN apk add --no-cache \
+    curl \
+    gcc \
+    musl-dev \
+    && rm -rf /var/cache/apk/*
+
+# 复制简化后端文件
+COPY simple_backend.py /app/
+
+# 安装Python依赖（针对ARM64优化）
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn[standard] \
+    pydantic \
+    python-multipart
+
+# 设置环境变量
+ENV PORT=8000
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health || exit 1
+
+# 启动命令
+CMD ["python", "simple_backend.py"]

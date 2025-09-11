@@ -515,3 +515,114 @@ class HealthResponse(APIResponse):
                 "active_connections": 25
             }
         }
+
+
+# 透视分析相关响应模型
+
+class PivotPreviewResponse(APIResponse):
+    """透视预览响应模型"""
+    
+    result_id: str = Field(..., description="连接结果ID")
+    preview_data: List[Dict[str, Any]] = Field(..., description="预览数据")
+    fields: Dict[str, str] = Field(..., description="字段类型映射")
+    sample_size: int = Field(..., description="样本大小")
+    total_size: int = Field(..., description="总数据量")
+    recommended_dimensions: List[str] = Field(..., description="推荐维度字段")
+    recommended_measures: List[str] = Field(..., description="推荐度量字段")
+    performance_hints: List[str] = Field(..., description="性能提示")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "timestamp": "2025-09-10T10:00:00Z",
+                "result_id": "join_result_123",
+                "preview_data": [
+                    {"customer_name": "张三", "city": "北京", "order_amount": 299.99},
+                    {"customer_name": "李四", "city": "上海", "order_amount": 159.50}
+                ],
+                "fields": {
+                    "customer_name": "string",
+                    "city": "string", 
+                    "order_amount": "number"
+                },
+                "sample_size": 100,
+                "total_size": 15847,
+                "recommended_dimensions": ["city", "customer_name"],
+                "recommended_measures": ["order_amount"],
+                "performance_hints": ["数据集较大，建议使用过滤条件"]
+            }
+        }
+
+
+class PivotDataResponse(APIResponse):
+    """透视数据响应模型"""
+    
+    result_id: str = Field(..., description="连接结果ID")
+    pivot_data: Dict[str, Any] = Field(..., description="透视计算结果")
+    row_fields: List[str] = Field(..., description="行字段")
+    col_fields: List[str] = Field(..., description="列字段")
+    value_fields: List[str] = Field(..., description="数值字段")
+    aggregation_type: str = Field(..., description="聚合类型")
+    total_records: int = Field(..., description="处理记录总数")
+    processing_time_ms: float = Field(..., description="处理时间（毫秒）")
+    warnings: List[str] = Field(default_factory=list, description="警告信息")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="元数据信息")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "timestamp": "2025-09-10T10:00:00Z",
+                "result_id": "join_result_123",
+                "pivot_data": {
+                    "pivot_table": [
+                        {"city": "北京", "order_amount_sum": 1299.99, "order_count": 5},
+                        {"city": "上海", "order_amount_sum": 899.50, "order_count": 3}
+                    ],
+                    "group_count": 2,
+                    "total_records": 15847
+                },
+                "row_fields": ["city"],
+                "col_fields": [],
+                "value_fields": ["order_amount"],
+                "aggregation_type": "sum",
+                "total_records": 15847,
+                "processing_time_ms": 1250.5,
+                "warnings": ["数据集较大，已应用性能优化"],
+                "metadata": {
+                    "source_info": [{"name": "customers"}, {"name": "orders"}],
+                    "quality_score": 92.3
+                }
+            }
+        }
+
+
+class ValidationResponse(APIResponse):
+    """数据验证响应模型"""
+    
+    result_id: str = Field(..., description="连接结果ID")
+    valid: bool = Field(..., description="是否验证通过")
+    warnings: List[str] = Field(..., description="警告信息")
+    recommendations: List[str] = Field(..., description="优化建议")
+    performance_score: float = Field(..., description="性能评分(0-100)")
+    data_summary: Dict[str, Any] = Field(..., description="数据概要")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "timestamp": "2025-09-10T10:00:00Z",
+                "result_id": "join_result_123",
+                "valid": True,
+                "warnings": ["数据集较大，透视操作可能较慢"],
+                "recommendations": ["考虑使用数据过滤", "选择关键字段进行分析"],
+                "performance_score": 75.5,
+                "data_summary": {
+                    "total_rows": 15847,
+                    "total_columns": 12,
+                    "numeric_columns": 5,
+                    "estimated_memory_mb": 12.5
+                }
+            }
+        }

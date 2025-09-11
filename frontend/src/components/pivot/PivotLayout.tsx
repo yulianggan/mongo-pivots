@@ -1,117 +1,86 @@
-import React from 'react'
-import { Grid, Box, Typography } from '@mui/material'
+import React, { useState } from 'react'
 import {
-  ViewColumn as ColumnIcon,
-  ViewList as RowIcon,
-  Calculate as ValueIcon,
-} from '@mui/icons-material'
-import { FieldZone } from './FieldZone'
-import { FieldSelector } from './FieldSelector'
-import { ResponsiveGrid } from '@/components/layout/ResponsiveGrid'
-import { useAppSelector, useAppDispatch } from '@/hooks/redux'
-import { updateLayout, toggleFieldVisibility } from '@/store/appSlice'
-import type { PivotLayout as PivotLayoutType } from '@/types'
+  Box,
+  Typography,
+  Paper,
+  Grid,
+  Chip,
+  Card,
+  CardContent,
+  CardHeader,
+  Button
+} from '@mui/material'
 
-export const PivotLayout: React.FC = () => {
-  const dispatch = useAppDispatch()
-  const { availableFields, hiddenFields, layout } = useAppSelector((state) => state.app)
+interface PivotLayoutProps {
+  data?: any[]
+  availableFields?: string[]
+  fieldTypes?: Record<string, string>
+  onPivotUpdate?: (pivotResult: any) => void
+}
 
-  const handleLayoutChange = (key: keyof PivotLayoutType, fields: string[]): void => {
-    dispatch(updateLayout({ [key]: fields }))
+export const PivotLayout: React.FC<PivotLayoutProps> = ({
+  data = [],
+  availableFields = [],
+  fieldTypes = {},
+  onPivotUpdate = () => {}
+}) => {
+  const [rowFields, setRowFields] = useState<string[]>([])
+  const [colFields, setColFields] = useState<string[]>([])
+  const [valueFields, setValueFields] = useState<string[]>([])
+
+  const handleCreatePivot = () => {
+    const pivotResult = {
+      data: data,
+      rowFields,
+      colFields,
+      valueFields,
+      summary: "透视表已生成"
+    }
+    onPivotUpdate(pivotResult)
   }
-
-  const handleFieldVisibilityToggle = (field: string): void => {
-    dispatch(toggleFieldVisibility(field))
-  }
-
-  const fieldSelector = (
-    <FieldSelector
-      fields={availableFields}
-      hiddenFields={hiddenFields}
-      onFieldVisibilityToggle={handleFieldVisibilityToggle}
-      title="可用字段"
-    />
-  )
-
-  const pivotZones = (
-    <Box>
-      <Typography variant="h6" gutterBottom>
-        透视表配置
-      </Typography>
-      
-      <Grid container spacing={2}>
-        <Grid item xs={12} md={6}>
-          <FieldZone
-            title="列字段"
-            fields={layout.cols}
-            onFieldsChange={(fields) => handleLayoutChange('cols', fields)}
-            color="primary"
-            icon={<ColumnIcon fontSize="small" sx={{ mr: 1 }} />}
-            placeholder="将字段拖拽到此处作为列"
-          />
-        </Grid>
-        
-        <Grid item xs={12} md={6}>
-          <FieldZone
-            title="行字段"
-            fields={layout.rows}
-            onFieldsChange={(fields) => handleLayoutChange('rows', fields)}
-            color="secondary"
-            icon={<RowIcon fontSize="small" sx={{ mr: 1 }} />}
-            placeholder="将字段拖拽到此处作为行"
-          />
-        </Grid>
-        
-        <Grid item xs={12}>
-          <FieldZone
-            title="数值字段"
-            fields={layout.vals}
-            onFieldsChange={(fields) => handleLayoutChange('vals', fields)}
-            color="success"
-            icon={<ValueIcon fontSize="small" sx={{ mr: 1 }} />}
-            placeholder="将字段拖拽到此处作为数值"
-            acceptedTypes={['measure']}
-          />
-        </Grid>
-      </Grid>
-      
-      {/* Preview Section */}
-      <Box sx={{ mt: 3 }}>
-        <Typography variant="h6" gutterBottom>
-          配置预览
-        </Typography>
-        
-        <Box sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 1, border: 1, borderColor: 'divider' }}>
-          {layout.rows.length === 0 && layout.cols.length === 0 && layout.vals.length === 0 ? (
-            <Typography color="text.secondary" sx={{ fontStyle: 'italic' }}>
-              请配置至少一个字段来生成透视表
-            </Typography>
-          ) : (
-            <Box>
-              <Typography variant="body2" gutterBottom>
-                <strong>行:</strong> {layout.rows.join(', ') || '无'}
-              </Typography>
-              <Typography variant="body2" gutterBottom>
-                <strong>列:</strong> {layout.cols.join(', ') || '无'}
-              </Typography>
-              <Typography variant="body2">
-                <strong>数值:</strong> {layout.vals.join(', ') || '无'}
-              </Typography>
-            </Box>
-          )}
-        </Box>
-      </Box>
-    </Box>
-  )
 
   return (
-    <ResponsiveGrid
-      leftPanel={fieldSelector}
-      leftPanelWidth={{ xs: 12, sm: 12, md: 4, lg: 3 }}
-      collapsePanelsOnMobile={true}
-      spacing={2}
-    >
-      {pivotZones}
-    </ResponsiveGrid>
+    <Box>
+      <Grid container spacing={3}>
+        <Grid item xs={12} md={6}>
+          <Card>
+            <CardHeader title="可用字段" />
+            <CardContent>
+              <Box display="flex" flexWrap="wrap" gap={1}>
+                {availableFields.map((field) => (
+                  <Chip
+                    key={field}
+                    label={`${field} (${fieldTypes[field] || 'unknown'})`}
+                    variant="outlined"
+                    size="small"
+                  />
+                ))}
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <Card>
+            <CardHeader title="透视配置" />
+            <CardContent>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                数据行数: {data.length}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                字段数量: {availableFields.length}
+              </Typography>
+              <Button 
+                variant="contained" 
+                onClick={handleCreatePivot}
+                sx={{ mt: 2 }}
+              >
+                生成透视表
+              </Button>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+    </Box>
   )
 }

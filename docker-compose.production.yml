@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: .
+      dockerfile: simple_backend.Dockerfile
+    container_name: mongo-pivot-backend-prod
+    environment:
+      - PORT=8000
+    ports: 
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.final
+    container_name: mongo-pivot-frontend-prod
+    environment: 
+      - API_BASE=http://localhost:8000
+    ports: 
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

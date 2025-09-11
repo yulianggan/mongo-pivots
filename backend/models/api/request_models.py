@@ -7,8 +7,24 @@ from typing import List, Dict, Any, Optional, Union
 from enum import Enum
 from datetime import datetime
 
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, validator, model_validator
 from pydantic.types import conint, constr
+
+
+class PerformanceMode(str, Enum):
+    """性能模式枚举"""
+    FAST = "fast"
+    BALANCED = "balanced"
+    ACCURATE = "accurate"
+
+
+class AggregationType(str, Enum):
+    """聚合类型枚举"""
+    SUM = "sum"
+    MEAN = "mean"
+    COUNT = "count"
+    MIN = "min"
+    MAX = "max"
 
 
 class DatasetUploadRequest(BaseModel):
@@ -331,6 +347,59 @@ class ValidationConfig(BaseModel):
     max_file_size_mb: int = Field(500, description="最大文件大小（MB）")
     max_dataset_rows: int = Field(10000000, description="数据集最大行数")
     max_join_operations: int = Field(10, description="最大连接操作数")
+
+
+class PivotConfigRequest(BaseModel):
+    """透视配置请求模型"""
+    
+    row_fields: List[str] = Field(default_factory=list, description="行字段列表")
+    col_fields: List[str] = Field(default_factory=list, description="列字段列表")
+    value_fields: List[str] = Field(..., min_items=1, description="数值字段列表")
+    aggregation_type: AggregationType = Field(AggregationType.SUM, description="聚合类型")
+    performance_mode: PerformanceMode = Field(PerformanceMode.BALANCED, description="性能模式")
+    filters: Optional[Dict[str, Any]] = Field(None, description="数据过滤条件")
+    sort_config: Optional[Dict[str, str]] = Field(None, description="排序配置")
+    
+    @validator('value_fields')
+    def validate_value_fields(cls, v):
+        if not v:
+            raise ValueError("至少需要一个数值字段")
+        return v
+    
+    @model_validator(mode='after')
+    def validate_field_combinations(self):
+        row_fields = self.row_fields or []
+        col_fields = self.col_fields or []
+        value_fields = self.value_fields or []
+        
+        # 检查字段重复
+        all_fields = row_fields + col_fields + value_fields
+        if len(all_fields) != len(set(all_fields)):
+            raise ValueError("字段不能重复使用")
+        
+        # 检查字段数量限制
+        if len(row_fields) + len(col_fields) > 10:
+            raise ValueError("行字段和列字段总数不能超过10个")
+        
+        return self
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "row_fields": ["customer_city", "product_category"],
+                "col_fields": ["order_month"],
+                "value_fields": ["order_amount", "order_count"],
+                "aggregation_type": "sum",
+                "performance_mode": "balanced",
+                "filters": {
+                    "order_amount": {"$gte": 100}
+                },
+                "sort_config": {
+                    "field": "order_amount_sum",
+                    "order": "desc"
+                }
+            }
+        }
     max_result_rows: int = Field(1000000, description="结果最大行数")
     allowed_file_extensions: List[str] = Field(
         ["csv", "xlsx", "xls", "tsv", "txt"],

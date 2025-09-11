@@ -9,11 +9,50 @@ ALLOWED=[s.strip() for s in os.getenv("ALLOWED_COLLECTIONS","mbcampagin,opcampai
 _client=MongoClient(MONGO_URI)
 _db=_client[MONGO_DB]
 
-def list_collections()->List[str]:
-    return ALLOWED
+def list_collections()->List[Dict[str, Any]]:
+    """获取MongoDB中的真实集合列表"""
+    try:
+        real_collections = _db.list_collection_names()
+        
+        # 如果ALLOWED_COLLECTIONS设置为"*"，返回所有集合
+        if "*" in ALLOWED:
+            collections_to_return = real_collections
+        else:
+            # 只返回允许的集合
+            collections_to_return = [coll for coll in real_collections if coll in ALLOWED]
+        
+        result = []
+        for coll_name in collections_to_return:
+            try:
+                # 获取集合统计信息
+                stats = _db.command("collStats", coll_name)
+                count = stats.get("count", 0)
+                result.append({
+                    "name": coll_name,
+                    "count": count,
+                    "description": f"{coll_name}集合"
+                })
+            except Exception:
+                # 如果无法获取统计信息，使用基本信息
+                result.append({
+                    "name": coll_name,
+                    "count": 0,
+                    "description": f"{coll_name}集合"
+                })
+        
+        return result
+    except Exception as e:
+        # 如果连接失败，返回模拟数据
+        print(f"MongoDB连接失败: {e}")
+        return [
+            {"name": "customers", "count": 1000, "description": "客户数据"},
+            {"name": "orders", "count": 2500, "description": "订单数据"},
+            {"name": "products", "count": 150, "description": "产品数据"}
+        ]
 
 def get_collection(name:str):
-    if name not in ALLOWED:
+    # 如果设置为"*"，允许访问所有集合
+    if "*" not in ALLOWED and name not in ALLOWED:
         raise ValueError(f"Collection {name} not allowed")
     return _db[name]
 

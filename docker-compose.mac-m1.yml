@@ -1,0 +1,48 @@
+version: '3.8'
+
+# Mac M1/M2 专用Docker Compose配置
+services:
+  backend:
+    platform: linux/arm64
+    build: 
+      context: .
+      dockerfile: Dockerfile.complete-backend
+      platforms:
+        - linux/arm64
+    container_name: mongo-pivot-backend-m1
+    env_file:
+      - .env
+    environment:
+      - PORT=8000
+    ports: 
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - mongo-pivot-net
+
+  frontend:
+    platform: linux/arm64
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.mac-m1
+      platforms:
+        - linux/arm64
+    container_name: mongo-pivot-frontend-m1
+    environment: 
+      - API_BASE=http://localhost:8000
+    ports: 
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - mongo-pivot-net
+
+networks:
+  mongo-pivot-net:
+    driver: bridge
+
+# Mac M1/M2 优化配置
+x-common-variables: &common-variables
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1

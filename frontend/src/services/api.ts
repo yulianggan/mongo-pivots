@@ -4,7 +4,8 @@ import {
   ApiCollectionsResponse, 
   ApiDataResponse, 
   DataRow,
-  AppError 
+  AppError,
+  CollectionInfo
 } from '@/types'
 
 class ApiService {
@@ -41,7 +42,23 @@ class ApiService {
 
   async getCollections(): Promise<string[]> {
     const response = await this.client.get<ApiCollectionsResponse>('/api/collections')
-    return response.data?.collections || []
+    
+    if (!response.data?.success) {
+      throw new AppError(response.data?.error || '获取集合列表失败')
+    }
+    
+    // 将新的对象格式转换为字符串数组以保持向后兼容
+    return response.data.collections.map((collection: CollectionInfo) => collection.name)
+  }
+
+  async getCollectionsWithInfo(): Promise<CollectionInfo[]> {
+    const response = await this.client.get<ApiCollectionsResponse>('/api/collections')
+    
+    if (!response.data?.success) {
+      throw new AppError(response.data?.error || '获取集合列表失败')
+    }
+    
+    return response.data.collections
   }
 
   async getData(params: {
