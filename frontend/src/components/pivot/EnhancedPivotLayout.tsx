@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   Box,
   Typography,
@@ -80,6 +80,7 @@ interface EnhancedPivotLayoutProps {
   availableFields?: string[]
   fieldTypes?: Record<string, string>
   onPivotUpdate?: (pivotResult: any) => void
+  currentCollection?: string
 }
 
 const AGGREGATION_OPTIONS: { value: AggregationType; label: string }[] = [
@@ -182,7 +183,8 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
   data = [],
   availableFields = [],
   fieldTypes = {},
-  onPivotUpdate = () => {}
+  onPivotUpdate = () => {},
+  currentCollection = ''
 }) => {
   const [config, setConfig] = useState<PivotConfig>({
     rowFields: [],
@@ -195,6 +197,7 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
   const [formatDialogOpen, setFormatDialogOpen] = useState(false)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [loadDialogOpen, setLoadDialogOpen] = useState(false)
+  const [cloudConfigList, setCloudConfigList] = useState<any[]>([])
 
   const [newComputedField, setNewComputedField] = useState<ComputedField>({
     name: '',
@@ -222,6 +225,92 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
   ])
 
   const [activeComputedTab, setActiveComputedTab] = useState(0)
+
+  // 当collection变化时自动加载配置
+  useEffect(() => {
+    if (currentCollection) {
+      loadConfigFromCloud(currentCollection)
+    }
+  }, [currentCollection])
+
+  // API调用：保存配置到云端
+  const saveConfigToCloud = async (configData: PivotConfig & { name: string }) => {
+    try {
+      const response = await fetch('/api/prefs/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          collection: currentCollection,
+          name: configData.name,
+          config: {
+            rowFields: configData.rowFields,
+            colFields: configData.colFields,
+            valueFields: configData.valueFields,
+            computedFields: configData.computedFields
+          }
+        }),
+      })
+      
+      if (!response.ok) {
+        throw new Error('保存配置失败')
+      }
+      
+      console.log('配置已保存到云端')
+    } catch (error) {
+      console.error('保存配置错误:', error)
+      alert('保存配置失败，请重试')
+    }
+  }
+
+  // API调用：从云端加载配置
+  const loadConfigFromCloud = async (collection: string) => {
+    try {
+      // 获取该集合的配置列表
+      const response = await fetch(`/api/prefs/list?collection=${collection}`)
+      
+      if (response.ok) {
+        const data = await response.json()
+        const configList = data.items || []
+        
+        // 如果有配置，加载最新的一个
+        if (configList.length > 0) {
+          const latestConfig = configList[0] // API已经按updatedAt排序
+          console.log('从云端加载配置:', latestConfig)
+          
+          if (latestConfig.config) {
+            setConfig({
+              rowFields: latestConfig.config.rowFields || [],
+              colFields: latestConfig.config.colFields || [],
+              valueFields: latestConfig.config.valueFields || [],
+              computedFields: latestConfig.config.computedFields || []
+            })
+            
+            console.log('配置已从云端加载')
+          }
+        }
+      }
+    } catch (error) {
+      console.error('加载配置错误:', error)
+    }
+  }
+
+  // 获取云端的所有配置列表
+  const getCloudConfigList = async (collection: string) => {
+    try {
+      const response = await fetch(`/api/prefs/list?collection=${collection}`)
+      
+      if (response.ok) {
+        const data = await response.json()
+        return data.items || []
+      }
+      return []
+    } catch (error) {
+      console.error('获取配置列表错误:', error)
+      return []
+    }
+  }
 
   // 处理拖拽结果
   const onDragEnd = (result: DropResult) => {
@@ -506,15 +595,17 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
         const computedField = config.computedFields.find(c => c.alias === valueField.field)
         if (computedField) {
           const dependentFields = extractFieldsFromFormula(computedField.formula)
-          
           dependentFields.forEach(depField => {
             // 检查是否已存在该字段的聚合配置
             const exists = valueFieldConfigs.some(vf => vf.field.toLowerCase() === depField.toLowerCase())
             
             if (!exists) {
+              // 尝试在可用字段中找到匹配的字段名（大小写不敏感）
+              const matchingField = availableFields.find(af => af.toLowerCase() === depField.toLowerCase()) || depField
+              
               // 自动添加依赖字段（默认使用sum聚合）
               valueFieldConfigs.push({
-                field: depField,
+                field: matchingField,
                 aggregation: 'sum' as AggregationType,
                 format: 'number' as FormatType
               })
@@ -640,13 +731,18 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
       })
     }
 
+    // 只返回用户明确选择的字段，隐藏自动添加的依赖字段
+    const visibleValueFields = config.valueFields
+
     return {
       data: pivotData,
       colTotals,
       grandTotal,
       rowFields: rowFieldNames,
       colFields: colFieldNames,
-      valueFields: valueFieldConfigs
+      valueFields: visibleValueFields,
+      // 保留完整的字段配置用于内部计算
+      _allValueFields: valueFieldConfigs
     }
   }, [data, config])
 
@@ -674,7 +770,7 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
   }
 
   // 保存配置
-  const saveConfig = () => {
+  const saveConfig = async () => {
     if (!configName) return
     
     const newConfig = {
@@ -682,6 +778,10 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
       name: configName
     }
     
+    // 保存到云端
+    await saveConfigToCloud(newConfig)
+    
+    // 同时保存到本地状态（用于向后兼容）
     setSavedConfigs(prev => {
       const existingIndex = prev.findIndex(c => c.name === configName)
       if (existingIndex >= 0) {
@@ -697,6 +797,15 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
     setSaveDialogOpen(false)
   }
 
+  // 打开加载配置对话框
+  const openLoadDialog = async () => {
+    if (currentCollection) {
+      const configs = await getCloudConfigList(currentCollection)
+      setCloudConfigList(configs)
+    }
+    setLoadDialogOpen(true)
+  }
+
   // 加载配置
   const loadConfig = (savedConfig: PivotConfig) => {
     setConfig({
@@ -705,6 +814,32 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
       valueFields: savedConfig.valueFields || [],
       computedFields: savedConfig.computedFields || []
     })
+    setLoadDialogOpen(false)
+  }
+
+  // 从云端加载指定配置
+  const loadCloudConfig = async (collection: string, name: string) => {
+    try {
+      const response = await fetch(`/api/prefs/get?collection=${collection}&name=${name}`)
+      
+      if (response.ok) {
+        const data = await response.json()
+        const cloudConfig = data.doc
+        
+        if (cloudConfig && cloudConfig.config) {
+          setConfig({
+            rowFields: cloudConfig.config.rowFields || [],
+            colFields: cloudConfig.config.colFields || [],
+            valueFields: cloudConfig.config.valueFields || [],
+            computedFields: cloudConfig.config.computedFields || []
+          })
+          
+          console.log('已从云端加载配置:', name)
+        }
+      }
+    } catch (error) {
+      console.error('加载指定配置错误:', error)
+    }
     setLoadDialogOpen(false)
   }
 
@@ -745,7 +880,7 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
             startIcon={<LoadIcon />}
             variant="outlined"
             size="small"
-            onClick={() => setLoadDialogOpen(true)}
+            onClick={openLoadDialog}
           >
             加载配置
           </Button>
@@ -1249,11 +1384,34 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
         <Dialog open={loadDialogOpen} onClose={() => setLoadDialogOpen(false)} maxWidth="sm" fullWidth>
           <DialogTitle>加载透视表配置</DialogTitle>
           <DialogContent>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              当前集合：{currentCollection}
+            </Typography>
             <List>
-              {savedConfigs.map((savedConfig, index) => (
+              {/* 显示云端配置 */}
+              {cloudConfigList.map((cloudConfig, index) => (
                 <ListItem key={index} divider>
                   <ListItemText
-                    primary={savedConfig.name}
+                    primary={cloudConfig.name || `配置 ${index + 1}`}
+                    secondary={`更新时间: ${cloudConfig.updatedAt ? new Date(cloudConfig.updatedAt).toLocaleString() : '未知'}`}
+                  />
+                  <ListItemSecondaryAction>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => loadCloudConfig(currentCollection, cloudConfig.name)}
+                    >
+                      加载
+                    </Button>
+                  </ListItemSecondaryAction>
+                </ListItem>
+              ))}
+              
+              {/* 显示本地配置（向后兼容） */}
+              {savedConfigs.map((savedConfig, index) => (
+                <ListItem key={`local-${index}`} divider>
+                  <ListItemText
+                    primary={`${savedConfig.name || `本地配置 ${index + 1}`} (本地)`}
                     secondary={`行字段: ${savedConfig.rowFields?.length || 0}, 列字段: ${savedConfig.colFields?.length || 0}, 指标: ${savedConfig.valueFields?.length || 0}`}
                   />
                   <ListItemSecondaryAction>
@@ -1268,9 +1426,9 @@ export const EnhancedPivotLayout: React.FC<EnhancedPivotLayoutProps> = ({
                 </ListItem>
               ))}
             </List>
-            {savedConfigs.length === 0 && (
+            {cloudConfigList.length === 0 && savedConfigs.length === 0 && (
               <Typography color="text.secondary" textAlign="center" py={3}>
-                暂无保存的配置
+                当前集合暂无保存的配置
               </Typography>
             )}
           </DialogContent>

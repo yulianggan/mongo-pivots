@@ -115,6 +115,7 @@ export const PivotPage: React.FC = () => {
               ...acc,
               [key]: typeof pivotData[0][key]
             }), {}) : {}}
+          currentCollection={config.collection}
           onPivotUpdate={(result) => {
             setPivotResult(result)
             setActiveTab(1) // 自动切换到透视表结果页面

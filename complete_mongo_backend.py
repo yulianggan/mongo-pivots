@@ -409,9 +409,12 @@ async def upload(file: UploadFile = File(...), sheet: str | None = Form(None), s
         raise HTTPException(400, f"文件 '{name}' 解析失败: {str(e)}")
 
 @app.get("/api/prefs/list")
-def prefs_list():
-    """获取所有偏好设置列表"""
-    return {"items": prefs.list_all()}
+def prefs_list(collection: str = None):
+    """获取偏好设置列表"""
+    if collection:
+        return {"items": prefs.list(collection)}
+    else:
+        return {"items": prefs.list_all()}
 
 @app.get("/api/prefs/get")
 def prefs_get(collection: str, name: str):
